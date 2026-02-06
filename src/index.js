@@ -56,7 +56,12 @@ const sessionMemory = new Map();
 
 // Initialize Express app
 const app = express();
+const path = require('path');
+
 app.use(express.json({ limit: '1mb' }));
+
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, '../public')));
 
 // CORS support for cross-origin requests
 app.use((req, res, next) => {
@@ -108,119 +113,11 @@ const authenticateApiKey = (req, res, next) => {
 };
 
 /**
- * Root endpoint - Welcome page
+ * Root endpoint - Serve frontend
  * GET /
  */
 app.get('/', (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Agentic Honey-Pot API</title>
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; color: #fff; }
-        .container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
-        h1 { font-size: 2.5rem; margin-bottom: 10px; }
-        h1 span { color: #e94560; }
-        .subtitle { color: #a0a0a0; margin-bottom: 40px; font-size: 1.1rem; }
-        .status { background: #0f3460; border-radius: 12px; padding: 25px; margin-bottom: 30px; border-left: 4px solid #00d9ff; }
-        .status h2 { color: #00d9ff; margin-bottom: 15px; }
-        .status-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1a4a7a; }
-        .status-item:last-child { border-bottom: none; }
-        .badge { background: #00ff88; color: #000; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; }
-        .endpoints { background: #0f3460; border-radius: 12px; padding: 25px; margin-bottom: 30px; }
-        .endpoints h2 { color: #e94560; margin-bottom: 20px; }
-        .endpoint { background: #16213e; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
-        .endpoint:last-child { margin-bottom: 0; }
-        .method { display: inline-block; background: #e94560; padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; margin-right: 10px; }
-        .method.get { background: #00d9ff; }
-        .path { font-family: 'Courier New', monospace; color: #fff; }
-        .desc { color: #a0a0a0; margin-top: 8px; font-size: 0.9rem; }
-        .test-section { background: #0f3460; border-radius: 12px; padding: 25px; }
-        .test-section h2 { color: #00ff88; margin-bottom: 15px; }
-        pre { background: #16213e; padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85rem; }
-        code { color: #00d9ff; }
-        .note { background: #2a1a4a; border-left: 4px solid #e94560; padding: 15px; margin: 20px 0; border-radius: 0 8px 8px 0; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <h1>🍯 Agentic <span>Honey-Pot</span></h1>
-        <p class="subtitle">Scam Detection & Intelligence Extraction API - HCL GUVI Buildathon</p>
-        
-        <div class="status">
-          <h2>📊 System Status</h2>
-          <div class="status-item">
-            <span>Server Status</span>
-            <span class="badge">● Online</span>
-          </div>
-          <div class="status-item">
-            <span>API Version</span>
-            <span>1.0.0</span>
-          </div>
-          <div class="status-item">
-            <span>Authentication</span>
-            <span>x-api-key header required</span>
-          </div>
-          <div class="status-item">
-            <span>Started At</span>
-            <span>${new Date().toISOString()}</span>
-          </div>
-        </div>
-
-        <div class="endpoints">
-          <h2>🔌 API Endpoints</h2>
-          <div class="endpoint">
-            <span class="method">POST</span>
-            <span class="path">/api/honeypot</span>
-            <p class="desc">Main endpoint - Process incoming scam messages and generate intelligent responses</p>
-          </div>
-          <div class="endpoint">
-            <span class="method get">GET</span>
-            <span class="path">/health</span>
-            <p class="desc">Health check endpoint</p>
-          </div>
-          <div class="endpoint">
-            <span class="method get">GET</span>
-            <span class="path">/metrics</span>
-            <p class="desc">View system metrics and statistics</p>
-          </div>
-        </div>
-
-        <div class="note">
-          <strong>⚠️ Authentication Required:</strong> All API requests must include the <code>x-api-key</code> header.
-        </div>
-
-        <div class="test-section">
-          <h2>🧪 API Request Format</h2>
-          <p style="color: #a0a0a0; margin-bottom: 15px;">Send a POST request to /api/honeypot with:</p>
-          <pre><code>{
-  "sessionId": "wertyu-dfghj-ertyui",
-  "message": {
-    "sender": "scammer",
-    "text": "Your bank account will be blocked today. Verify immediately.",
-    "timestamp": 1770005528731
-  },
-  "conversationHistory": [],
-  "metadata": {
-    "channel": "SMS",
-    "language": "English",
-    "locale": "IN"
-  }
-}</code></pre>
-          <p style="color: #a0a0a0; margin-top: 20px;">Response format:</p>
-          <pre><code>{
-  "status": "success",
-  "reply": "Why is my account being suspended?"
-}</code></pre>
-        </div>
-      </div>
-    </body>
-    </html>
-  `);
+  res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
 /**
