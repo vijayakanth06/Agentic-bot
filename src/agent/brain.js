@@ -28,15 +28,22 @@ class ConversationBrain {
    * Returns: 'english', 'hindi', or 'hinglish'
    */
   detectLanguage(message) {
-    const hindiWords = /\b(kya|hai|kaise|ho|aap|mein|hum|yeh|woh|karo|karna|karenge|bolo|batao|abhi|jaldi|paise|paisa|bhejo|dedo|lo|lena|dena|nahi|haan|ji|sir|madam|sahab|beta|bhai|didi|bahen|rupaye|rupee|lakh|crore|tum|tumhara|mera|apka|unka|iska|uska|accha|theek|sahi|galat|bank|khata|number|phone|mobile|call|karo|kijiye|dijiye|lijiye|bataye|samjho|samjhao|suniye|dekhiye|jaldi|turant|foran|abhi|tab|phir|baad|pehle|aage|piche|upar|niche|andar|bahar|yahan|wahan|kyun|kab|kahan|kaun|kitna|kaise)\b/gi;
-    const hindiMatches = (message.match(hindiWords) || []).length;
+    // ONLY pure Hindi/Hinglish words - NOT common English words used in India
+    const pureHindiWords = /\b(kya|hai|kaise|ho|aap|mein|hum|yeh|woh|karo|karna|karenge|bolo|batao|abhi|jaldi|paise|paisa|bhejo|dedo|lo|lena|dena|nahi|haan|ji|sahab|beta|bhai|didi|bahen|rupaye|lakh|crore|tum|tumhara|mera|apka|unka|iska|uska|accha|theek|sahi|galat|khata|samjho|samjhao|suniye|dekhiye|turant|foran|tab|phir|baad|pehle|aage|piche|upar|niche|andar|bahar|yahan|wahan|kyun|kab|kahan|kaun|kitna|kaise|hoga|hogi|raha|rahi|karunga|karungi|jayega|jayegi|milega|milegi|bata|de|le|kar|bol|sun|dekh|ruk|chal|aa|ja|mat|na|toh|par|lekin|aur|bhi|sirf|bas|abhi|kal|aaj|subah|shaam|raat|din)\b/gi;
+    const hindiMatches = (message.match(pureHindiWords) || []).length;
     
-    // Check for Devanagari script
+    // Check for Devanagari script - definite Hindi
     const hasDevanagari = /[\u0900-\u097F]/.test(message);
     
-    if (hasDevanagari || hindiMatches >= 3) {
+    // Calculate word count for ratio
+    const wordCount = message.split(/\s+/).length;
+    const hindiRatio = hindiMatches / wordCount;
+    
+    if (hasDevanagari) {
       return 'hindi';
-    } else if (hindiMatches >= 1) {
+    } else if (hindiRatio > 0.3 || hindiMatches >= 4) {
+      return 'hindi';
+    } else if (hindiMatches >= 2 || (hindiMatches >= 1 && hindiRatio > 0.1)) {
       return 'hinglish';
     }
     return 'english';
