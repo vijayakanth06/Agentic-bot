@@ -20,42 +20,42 @@ const STATES = {
 const STATE_CONFIGS = {
   INITIAL: {
     next: ['GREETING'],
-    maxTurns: 1,
+    maxTurns: 2,
     canEnd: false
   },
   GREETING: {
     next: ['BUILDING_RAPPORT'],
-    maxTurns: 3,
+    maxTurns: 4,
     canEnd: false
   },
   BUILDING_RAPPORT: {
     next: ['FINANCIAL_CONTEXT', 'REQUEST'],
-    maxTurns: 5,
+    maxTurns: 6,
     canEnd: false
   },
   FINANCIAL_CONTEXT: {
-    next: ['REQUEST'],
-    maxTurns: 5,
+    next: ['REQUEST', 'EXTRACTION'],
+    maxTurns: 8,
     canEnd: false
   },
   REQUEST: {
     next: ['EXTRACTION', 'FINANCIAL_CONTEXT', 'SUSPICIOUS'],
-    maxTurns: 2,
+    maxTurns: 6,
     canEnd: false
   },
   EXTRACTION: {
     next: ['CLOSING', 'SUSPICIOUS'],
-    maxTurns: 10,
+    maxTurns: 15,
     canEnd: false
   },
   SUSPICIOUS: {
     next: ['EXTRACTION', 'CLOSING', 'ENDED'],
-    maxTurns: 3,
+    maxTurns: 5,
     canEnd: true
   },
   CLOSING: {
     next: ['ENDED'],
-    maxTurns: 2,
+    maxTurns: 3,
     canEnd: true
   },
   ENDED: {
@@ -260,14 +260,27 @@ class StateMachine {
   }
 
   transitionFromExtraction(context) {
-    // Check if all targets extracted
-    const extractionComplete = context.extractionProgress >= 0.8;
+    // Only close if we have really good extraction OR very high turn count
+    const extractionComplete = context.extractionProgress >= 0.9;
     
-    if (extractionComplete || context.turnCount >= 10) {
+    // Much higher threshold before going to CLOSING
+    if (extractionComplete && context.turnCount >= 12) {
       return {
         current_state: STATES.EXTRACTION,
         next_state: STATES.CLOSING,
-        reason: extractionComplete ? 'Extraction complete' : 'Max extraction turns reached',
+        reason: 'Extraction complete with good data',
+        confidence: 0.9,
+        should_end: false,
+        termination_strategy: 'graceful_closing'
+      };
+    }
+
+    // Only timeout at very high turn count
+    if (context.turnCount >= 15) {
+      return {
+        current_state: STATES.EXTRACTION,
+        next_state: STATES.CLOSING,
+        reason: 'Max extraction turns reached',
         confidence: 0.9,
         should_end: false,
         termination_strategy: 'graceful_closing'
@@ -275,7 +288,7 @@ class StateMachine {
     }
 
     // Check for suspicion indicators
-    if (context.consecutiveDelays >= 3) {
+    if (context.consecutiveDelays >= 4) {
       return {
         current_state: STATES.EXTRACTION,
         next_state: STATES.SUSPICIOUS,
@@ -285,11 +298,12 @@ class StateMachine {
       };
     }
 
+    // Stay in EXTRACTION to keep engaging
     return {
       current_state: STATES.EXTRACTION,
       next_state: STATES.EXTRACTION,
-      reason: 'Continuing extraction',
-      confidence: 0.6,
+      reason: 'Continuing extraction - more data needed',
+      confidence: 0.7,
       should_end: false
     };
   }

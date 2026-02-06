@@ -139,14 +139,26 @@ test('StateMachine: Financial context triggers transition', () => {
   assertEqual(result.next_state, STATES.FINANCIAL_CONTEXT, 'Should transition on financial context');
 });
 
-test('StateMachine: EXTRACTION transitions to CLOSING after max turns', () => {
+test('StateMachine: EXTRACTION stays engaged with low progress', () => {
   const machine = new StateMachine();
+  // With low extraction progress, should stay in EXTRACTION even at turn 10
   const result = machine.transition(STATES.EXTRACTION, { 
     turnCount: 10, 
     extractionProgress: 0.5,
     consecutiveDelays: 0
   });
-  assertEqual(result.next_state, STATES.CLOSING, 'Should transition to CLOSING');
+  assertEqual(result.next_state, STATES.EXTRACTION, 'Should stay in EXTRACTION with low progress');
+});
+
+test('StateMachine: EXTRACTION transitions to CLOSING with high progress', () => {
+  const machine = new StateMachine();
+  // Should only close with high progress (>=0.9) and enough turns (>=12)
+  const result = machine.transition(STATES.EXTRACTION, { 
+    turnCount: 15, 
+    extractionProgress: 0.95,
+    consecutiveDelays: 0
+  });
+  assertEqual(result.next_state, STATES.CLOSING, 'Should transition to CLOSING with high progress');
 });
 
 test('StateMachine: SUSPICIOUS recovery', () => {
@@ -298,7 +310,7 @@ test('AgentOrchestrator: Generates state-specific prompts', () => {
   const orchestrator = new AgentOrchestrator();
   const prompt = orchestrator.getStatePrompt('EXTRACTION', { scamType: 'bank_fraud' });
   assertTrue(prompt.includes('EXTRACTION'), 'Should include state name');
-  assertTrue(prompt.includes('Priya'), 'Should include persona name');
+  assertTrue(prompt.includes('bank_fraud'), 'Should include scam type');
 });
 
 test('AgentOrchestrator: Generates responses for different states', async () => {
