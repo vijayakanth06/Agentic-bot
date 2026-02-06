@@ -330,40 +330,59 @@ class ConversationBrain {
   }
 
   /**
-   * Respond to greeting messages
+   * Respond to greeting messages - LANGUAGE AWARE
    */
   respondToGreeting(message, isPotentialScam) {
-    const greetings = [
+    const isEnglish = this.detectedLanguage === 'english';
+    
+    const greetings = isEnglish ? [
       "Hello! Who's this? I don't have this number saved.",
-      "Hi hi! Yes, who am I speaking with?",
+      "Hi! Yes, who am I speaking with?",
       "Hello? Sorry, didn't catch your name. Who's calling?",
       "Hey! Yes tell me, who is this?",
-      "Hi, this number's not saved. May I know who's calling?",
-      "Hello ji! Han bolo, kaun hai?"
+      "Hi, this number's not saved. May I know who's calling?"
+    ] : [
+      "Hello! Kaun hai? Yeh number saved nahi hai mere paas.",
+      "Hi hi! Haan, aap kaun bol rahe ho?",
+      "Hello? Sorry, naam nahi suna. Kaun bol raha hai?",
+      "Hey! Haan batao, kaun hai?",
+      "Hello ji! Haan bolo, kaun hai?"
     ];
     
     return this.addPersonalityFlair(this.pickRandom(greetings));
   }
 
   /**
-   * Respond to goodbye messages
+   * Respond to goodbye messages - LANGUAGE AWARE
    */
   respondToGoodbye(message, wasScam) {
+    const isEnglish = this.detectedLanguage === 'english';
+    
     if (wasScam) {
       // Try to extract one last piece of info
-      const responses = [
-        "Wait wait, before you go - can you share your WhatsApp number? I'll message you.",
-        "Okay but send me your contact details na? I want to follow up.",
+      const responses = isEnglish ? [
+        "Wait, before you go - can you share your WhatsApp number? I'll message you.",
+        "Okay but send me your contact details please. I want to follow up.",
         "Alright, but what's your email? I'll confirm everything in writing.",
         "Sure, but let me save your number. What was your name again?"
+      ] : [
+        "Ruko, jaane se pehle - WhatsApp number de do? Message karti hun.",
+        "Okay par contact details bhej do na. Follow up karna hai mujhe.",
+        "Theek hai, par email kya hai? Writing mein confirm karna hai mujhe.",
+        "Theek hai, par number save karne do. Naam kya tha aapka?"
       ];
       return this.pickRandom(responses);
     } else {
-      const responses = [
+      const responses = isEnglish ? [
         "Okay, bye bye! Take care!",
         "Alright, talk later. Bye!",
         "Sure, no problem. Bye!",
         "Okay bye! Nice talking to you."
+      ] : [
+        "Okay, bye bye! Dhyan rakhna!",
+        "Theek hai, baad mein baat karte hain. Bye!",
+        "Haan haan, koi baat nahi. Bye!",
+        "Bye bye! Achha laga baat karke."
       ];
       return this.pickRandom(responses);
     }
