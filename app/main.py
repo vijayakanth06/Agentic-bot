@@ -1,4 +1,4 @@
-﻿"""
+"""
 Agentic Honeypot â€” Main FastAPI Application.
 
 Product-grade system handling both messages and voice calls.
