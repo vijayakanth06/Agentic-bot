@@ -4,12 +4,15 @@ SQLite Database — Persistent storage for sessions, messages, and intelligence.
 Uses aiosqlite for async operations with FastAPI.
 """
 
+import os
 import json
 import aiosqlite
 from datetime import datetime
 from app.config import settings
 
-DB_PATH = settings.DB_PATH
+# On Vercel serverless, the filesystem is read-only except /tmp
+IS_SERVERLESS = os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+DB_PATH = "/tmp/honeypot.db" if IS_SERVERLESS else settings.DB_PATH
 
 
 async def init_db():

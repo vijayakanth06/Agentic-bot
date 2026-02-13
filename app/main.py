@@ -1,19 +1,19 @@
-"""
-Agentic Honeypot — Main FastAPI Application.
+﻿"""
+Agentic Honeypot â€” Main FastAPI Application.
 
 Product-grade system handling both messages and voice calls.
 Endpoints:
-  POST /api/honeypot        — Process scam message (GUVI compatible)
-  POST /api/voice/detect    — AI-generated voice detection (Problem 1)
-  POST /api/handoff         — User triggers AI hand-off
-  POST /api/voice/incoming  — Twilio inbound call webhook
-  POST /api/voice/respond   — Twilio speech recognition callback
-  GET  /api/sessions        — List all sessions
-  GET  /api/sessions/{id}   — Get session detail + intel
-  GET  /api/reports/{id}    — Generate & download PDF report
-  GET  /api/dashboard       — Dashboard statistics
-  GET  /health              — Health check
-  WS   /ws/dashboard        — Real-time dashboard WebSocket
+  POST /api/honeypot        â€” Process scam message (GUVI compatible)
+  POST /api/voice/detect    â€” AI-generated voice detection (Problem 1)
+  POST /api/handoff         â€” User triggers AI hand-off
+  POST /api/voice/incoming  â€” Twilio inbound call webhook
+  POST /api/voice/respond   â€” Twilio speech recognition callback
+  GET  /api/sessions        â€” List all sessions
+  GET  /api/sessions/{id}   â€” Get session detail + intel
+  GET  /api/reports/{id}    â€” Generate & download PDF report
+  GET  /api/dashboard       â€” Dashboard statistics
+  GET  /health              â€” Health check
+  WS   /ws/dashboard        â€” Real-time dashboard WebSocket
 """
 
 import os
@@ -24,9 +24,10 @@ import asyncio
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-# Allow running as `python app/main.py` directly
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+# Ensure project root is importable (for Vercel + direct run)
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from fastapi import FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect, Header, UploadFile, File
 from fastapi.staticfiles import StaticFiles
@@ -40,14 +41,19 @@ from app.detection.scam_detector import ScamDetector, DetectionResult
 from app.extraction.extractor import IntelligenceExtractor
 from app.state.machine import StateMachine, State
 from app.handoff.handler import HandoffHandler, HandoffMode
-from app.database import db
+from app.database.db import (
+    init_db, create_session as db_create_session,
+    update_session as db_update_session, save_message, save_intelligence,
+    save_handoff_event, get_session as db_get_session,
+    get_messages, get_intelligence, get_all_sessions, get_dashboard_stats,
+)
 from app.reports.generator import generate_report
 from app.voice.stt import transcribe_audio
 from app.voice.tts import text_to_speech
 from app.voice.call_handler import generate_answer_twiml, generate_gather_twiml, generate_response_twiml
 from app.voice.voice_detector import detect_ai_voice
 
-# ─── Session Store (in-memory, synced to DB) ───
+# â”€â”€â”€ Session Store (in-memory, synced to DB) â”€â”€â”€
 
 sessions: dict[str, dict] = {}
 detector = ScamDetector()
@@ -55,20 +61,23 @@ handoff_handler = HandoffHandler()
 dashboard_websockets: list[WebSocket] = []
 
 
-# ─── Lifespan ───
+# â”€â”€â”€ Lifespan â”€â”€â”€
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.init_db()
-    print(f"🍯 Agentic Honeypot started on port {settings.PORT}")
-    print(f"   GROQ API: {'✅ Configured' if settings.GROQ_API_KEY else '❌ Missing'}")
-    print(f"   ElevenLabs: {'✅ Configured' if settings.ELEVENLABS_API_KEY else '❌ Missing'}")
-    print(f"   Twilio: {'✅ Configured' if settings.TWILIO_ACCOUNT_SID else '❌ Missing'}")
+    try:
+        await init_db()
+    except Exception as e:
+        print(f"âš ï¸  Database init skipped: {e}")
+    print(f"ðŸ¯ Agentic Honeypot started on port {settings.PORT}")
+    print(f"   GROQ API: {'âœ… Configured' if settings.GROQ_API_KEY else 'âŒ Missing'}")
+    print(f"   ElevenLabs: {'âœ… Configured' if settings.ELEVENLABS_API_KEY else 'âŒ Missing'}")
+    print(f"   Twilio: {'âœ… Configured' if settings.TWILIO_ACCOUNT_SID else 'âŒ Missing'}")
     yield
-    print("🛑 Honeypot shutting down")
+    print("ðŸ›‘ Honeypot shutting down")
 
 
-# ─── App ───
+# â”€â”€â”€ App â”€â”€â”€
 
 app = FastAPI(
     title="Agentic Honeypot",
@@ -90,7 +99,7 @@ if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 
-# ─── API Key Authentication ───
+# â”€â”€â”€ API Key Authentication â”€â”€â”€
 
 async def verify_api_key(x_api_key: str = Header(None)):
     """Verify the x-api-key header for protected endpoints."""
@@ -99,7 +108,7 @@ async def verify_api_key(x_api_key: str = Header(None)):
     return x_api_key
 
 
-# ─── Request/Response Models ───
+# â”€â”€â”€ Request/Response Models â”€â”€â”€
 
 class MessageInput(BaseModel):
     sender: str = "scammer"
@@ -119,7 +128,7 @@ class HandoffRequest(BaseModel):
     action: str = "activate"  # activate | deactivate | monitor
 
 
-# ─── Helper: Get or create session ───
+# â”€â”€â”€ Helper: Get or create session â”€â”€â”€
 
 def get_session(session_id: str) -> dict:
     if session_id not in sessions:
@@ -149,7 +158,7 @@ async def broadcast_dashboard(event: dict):
         dashboard_websockets.remove(ws)
 
 
-# ─── API Endpoints ───
+# â”€â”€â”€ API Endpoints â”€â”€â”€
 
 @app.get("/health")
 async def health():
@@ -168,7 +177,7 @@ async def health():
 
 @app.post("/api/honeypot")
 async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None)):
-    """Main honeypot endpoint — processes scam messages.
+    """Main honeypot endpoint â€” processes scam messages.
 
     Compatible with GUVI evaluation format.
     """
@@ -221,20 +230,23 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
     session["history"].append({"sender": "scammer", "text": message_text})
     session["history"].append({"sender": "agent", "text": reply})
 
-    # 7. Persist to DB
-    await db.create_session(req.sessionId, channel="message")
-    await db.save_message(req.sessionId, "scammer", message_text, sm.get_state())
-    await db.save_message(req.sessionId, "agent", reply, sm.get_state())
-    if new_intel:
-        await db.save_intelligence(req.sessionId, new_intel)
-    await db.update_session(
-        req.sessionId,
-        scam_type=session["scam_type"],
-        scam_confidence=session["scam_confidence"],
-        state=sm.get_state(),
-        turn_count=sm.turn_count,
-        total_extracted=len(session["intelligence"]),
-    )
+    # 7. Persist to DB (best-effort, don't block response)
+    try:
+        await db_create_session(req.sessionId, channel="message")
+        await save_message(req.sessionId, "scammer", message_text, sm.get_state())
+        await save_message(req.sessionId, "agent", reply, sm.get_state())
+        if new_intel:
+            await save_intelligence(req.sessionId, new_intel)
+        await db_update_session(
+            req.sessionId,
+            scam_type=session["scam_type"],
+            scam_confidence=session["scam_confidence"],
+            state=sm.get_state(),
+            turn_count=sm.turn_count,
+            total_extracted=len(session["intelligence"]),
+        )
+    except Exception as e:
+        print(f"[DB] Persist skipped: {e}")
 
     # 8. Broadcast to dashboard
     await broadcast_dashboard({
@@ -259,7 +271,7 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
     return {
         "status": "success",
         "reply": reply,
-        # ─── GUVI evaluation fields ───
+        # â”€â”€â”€ GUVI evaluation fields â”€â”€â”€
         "scamDetected": detection.is_scam or session["scam_confidence"] > 0.3,
         "totalMessagesExchanged": sm.turn_count,
         "extractedIntelligence": {
@@ -270,7 +282,7 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
             "suspiciousKeywords": suspicious_kw[:10],
         },
         "agentNotes": f"Scam type: {session['scam_type']}. Tactics used: {', '.join(suspicious_kw[:5])}. Phone numbers collected: {len(phone_numbers)}. Total engagement: {sm.turn_count} messages",
-        # ─── Extended fields ───
+        # â”€â”€â”€ Extended fields â”€â”€â”€
         "analysis": {
             "is_scam": detection.is_scam,
             "scam_confidence": session["scam_confidence"],
@@ -303,16 +315,25 @@ async def handoff_endpoint(req: HandoffRequest):
             scam_confidence=session["scam_confidence"],
             message_count=len(session["history"]),
         )
-        await db.save_handoff_event(req.sessionId, "user", "ai_agent", "user_triggered", session["scam_confidence"])
-        await db.update_session(req.sessionId, handoff_mode="ai_agent")
+        try:
+            await save_handoff_event(req.sessionId, "user", "ai_agent", "user_triggered", session["scam_confidence"])
+            await db_update_session(req.sessionId, handoff_mode="ai_agent")
+        except Exception:
+            pass
     elif req.action == "deactivate":
         state = handoff_handler.revoke_handoff(req.sessionId)
-        await db.save_handoff_event(req.sessionId, "ai_agent", "user", "user_revoked", 0)
-        await db.update_session(req.sessionId, handoff_mode="user")
+        try:
+            await save_handoff_event(req.sessionId, "ai_agent", "user", "user_revoked", 0)
+            await db_update_session(req.sessionId, handoff_mode="user")
+        except Exception:
+            pass
     elif req.action == "monitor":
         state = handoff_handler.set_monitoring(req.sessionId)
-        await db.save_handoff_event(req.sessionId, "user", "monitoring", "user_set_monitoring", 0)
-        await db.update_session(req.sessionId, handoff_mode="monitoring")
+        try:
+            await save_handoff_event(req.sessionId, "user", "monitoring", "user_set_monitoring", 0)
+            await db_update_session(req.sessionId, handoff_mode="monitoring")
+        except Exception:
+            pass
     else:
         raise HTTPException(status_code=400, detail="Invalid action. Use: activate, deactivate, monitor")
 
@@ -320,11 +341,11 @@ async def handoff_endpoint(req: HandoffRequest):
     return {"status": "success", "handoff": handoff_handler.get_state(req.sessionId)}
 
 
-# ─── Voice Call Endpoints ───
+# â”€â”€â”€ Voice Call Endpoints â”€â”€â”€
 
 @app.post("/api/voice/incoming")
 async def voice_incoming(request: Request):
-    """Twilio webhook — called when an inbound call arrives."""
+    """Twilio webhook â€” called when an inbound call arrives."""
     form = await request.form()
     call_sid = form.get("CallSid", str(uuid.uuid4()))
     from_number = form.get("From", "unknown")
@@ -334,12 +355,15 @@ async def voice_incoming(request: Request):
     session["channel"] = "voice"
     session["caller"] = from_number
 
-    await db.create_session(session_id, channel="voice")
+    try:
+        await db_create_session(session_id, channel="voice")
+    except Exception:
+        pass
 
     # Auto-activate AI for all incoming calls
     handoff_handler.initiate_handoff(session_id, reason="auto_voice", scam_confidence=0)
 
-    # Generate TwiML — use Gather mode with speech recognition
+    # Generate TwiML â€” use Gather mode with speech recognition
     base_url = str(request.base_url).rstrip("/")
     action_url = f"{base_url}/api/voice/respond?session_id={session_id}"
     twiml = generate_gather_twiml(session_id, action_url)
@@ -355,7 +379,7 @@ async def voice_incoming(request: Request):
 
 @app.post("/api/voice/respond")
 async def voice_respond(request: Request, session_id: str = ""):
-    """Twilio callback — processes speech input from the caller."""
+    """Twilio callback â€” processes speech input from the caller."""
     form = await request.form()
     speech_text = form.get("SpeechResult", "")
 
@@ -401,18 +425,21 @@ async def voice_respond(request: Request, session_id: str = ""):
     # 5. Store in history & DB
     session["history"].append({"sender": "scammer", "text": speech_text})
     session["history"].append({"sender": "agent", "text": reply})
-    await db.save_message(session_id, "scammer", speech_text, sm.get_state(), "voice")
-    await db.save_message(session_id, "agent", reply, sm.get_state(), "voice")
-    if new_intel:
-        await db.save_intelligence(session_id, new_intel)
-    await db.update_session(
-        session_id,
-        scam_type=session["scam_type"],
-        scam_confidence=session["scam_confidence"],
-        state=sm.get_state(),
-        turn_count=sm.turn_count,
-        total_extracted=len(session["intelligence"]),
-    )
+    try:
+        await save_message(session_id, "scammer", speech_text, sm.get_state(), "voice")
+        await save_message(session_id, "agent", reply, sm.get_state(), "voice")
+        if new_intel:
+            await save_intelligence(session_id, new_intel)
+        await db_update_session(
+            session_id,
+            scam_type=session["scam_type"],
+            scam_confidence=session["scam_confidence"],
+            state=sm.get_state(),
+            turn_count=sm.turn_count,
+            total_extracted=len(session["intelligence"]),
+        )
+    except Exception as e:
+        print(f"[DB] Voice persist skipped: {e}")
 
     # 6. Try ElevenLabs TTS for human-like voice
     audio_url = None
@@ -452,21 +479,29 @@ async def voice_respond(request: Request, session_id: str = ""):
     return Response(content=twiml, media_type="application/xml")
 
 
-# ─── Data Endpoints ───
+# â”€â”€â”€ Data Endpoints â”€â”€â”€
 
 @app.get("/api/sessions")
 async def list_sessions():
-    sessions_list = await db.get_all_sessions()
+    try:
+        sessions_list = await get_all_sessions()
+    except Exception:
+        sessions_list = []
     return {"status": "success", "sessions": sessions_list}
 
 
 @app.get("/api/sessions/{session_id}")
 async def get_session_detail(session_id: str):
-    session_data = await db.get_session(session_id)
-    if not session_data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    messages = await db.get_messages(session_id)
-    intelligence = await db.get_intelligence(session_id)
+    try:
+        session_data = await db_get_session(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        messages = await get_messages(session_id)
+        intelligence = await get_intelligence(session_id)
+    except HTTPException:
+        raise
+    except Exception:
+        return {"status": "error", "detail": "Database unavailable"}
     return {
         "status": "success",
         "session": session_data,
@@ -479,22 +514,30 @@ async def get_session_detail(session_id: str):
 @app.get("/api/reports/{session_id}")
 async def download_report(session_id: str):
     """Generate and download a PDF law enforcement report."""
-    session_data = await db.get_session(session_id)
-    if not session_data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    messages = await db.get_messages(session_id)
-    intelligence = await db.get_intelligence(session_id)
-    filepath = await generate_report(session_id, session_data, messages, intelligence)
-    return FileResponse(filepath, filename=os.path.basename(filepath), media_type="application/pdf")
+    try:
+        session_data = await db_get_session(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        messages = await get_messages(session_id)
+        intelligence = await get_intelligence(session_id)
+        filepath = await generate_report(session_id, session_data, messages, intelligence)
+        return FileResponse(filepath, filename=os.path.basename(filepath), media_type="application/pdf")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {e}")
 
 
 @app.get("/api/dashboard")
 async def dashboard_stats():
-    stats = await db.get_dashboard_stats()
+    try:
+        stats = await get_dashboard_stats()
+    except Exception:
+        stats = {"total_sessions": 0, "active_sessions": 0, "scams_detected": 0, "intelligence_items": 0, "total_messages": 0}
     return {"status": "success", **stats}
 
 
-# ─── WebSocket for Live Dashboard ───
+# â”€â”€â”€ WebSocket for Live Dashboard â”€â”€â”€
 
 @app.websocket("/ws/dashboard")
 async def websocket_dashboard(ws: WebSocket):
@@ -507,14 +550,14 @@ async def websocket_dashboard(ws: WebSocket):
         dashboard_websockets.remove(ws)
 
 
-# ─── Serve TTS Audio Files ───
+# â”€â”€â”€ Serve TTS Audio Files â”€â”€â”€
 
 audio_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp_audio")
 os.makedirs(audio_dir, exist_ok=True)
 app.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
 
 
-# ─── Serve Frontend ───
+# â”€â”€â”€ Serve Frontend â”€â”€â”€
 
 @app.get("/")
 async def serve_frontend():
@@ -524,14 +567,14 @@ async def serve_frontend():
     return HTMLResponse("<h1>Agentic Honeypot</h1><p>Frontend not found. Place index.html in /frontend/</p>")
 
 
-# ─── Problem 1: AI Voice Detection ───
+# â”€â”€â”€ Problem 1: AI Voice Detection â”€â”€â”€
 
 @app.post("/api/voice/detect")
 async def voice_detect_endpoint(
     audio: UploadFile = File(...),
     x_api_key: str = Header(None),
 ):
-    """Problem 1 — Detect whether audio contains AI-generated speech."""
+    """Problem 1 â€” Detect whether audio contains AI-generated speech."""
     if x_api_key and x_api_key != settings.API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -550,7 +593,7 @@ async def voice_detect_endpoint(
     }
 
 
-# ─── Backward Compat (GUVI) ───
+# â”€â”€â”€ Backward Compat (GUVI) â”€â”€â”€
 
 @app.post("/api/conversation")
 async def conversation_compat(req: HoneypotRequest, x_api_key: str = Header(None)):
@@ -558,8 +601,9 @@ async def conversation_compat(req: HoneypotRequest, x_api_key: str = Header(None
     return await honeypot_endpoint(req, x_api_key)
 
 
-# ─── Run ───
+# â”€â”€â”€ Run â”€â”€â”€
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=settings.DEBUG)
+
