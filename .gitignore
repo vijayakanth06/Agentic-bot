@@ -90,3 +90,5 @@ temp_audio/
 reports/*.pdf
 test_report.pdf
 .vercel/
+
+test_report.json

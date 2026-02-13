@@ -39,7 +39,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 sessions: dict[str, dict] = {}
 
 # ═══════════════════════════════════════════════
-# Scam Detection Engine (35+ patterns)
+# Scam Detection Engine (55+ patterns)
 # ═══════════════════════════════════════════════
 
 @dataclass
@@ -58,32 +58,82 @@ class DetectionResult:
     urgency_level: str = "low"
 
 SCAM_PATTERNS = [
+    # --- Urgency / Pressure ---
     ScamIndicator(re.compile(r"urgent|immediately|within \d+ (hours?|minutes?)|right now", re.I), 0.18, "urgency", True),
     ScamIndicator(re.compile(r"act now|don'?t delay|time (is|was) running|last chance|final warning", re.I), 0.15, "urgency", True),
     ScamIndicator(re.compile(r"expir(e|ing|ed)|deadline|limited time|hurry|asap", re.I), 0.12, "urgency", True),
+    ScamIndicator(re.compile(r"before.{0,15}(expire|block|suspend|close|lock)", re.I), 0.12, "urgency", True),
+    ScamIndicator(re.compile(r"session.{0,10}(expir|timeout|time)", re.I), 0.10, "urgency", True),
+
+    # --- Authority / Impersonation ---
     ScamIndicator(re.compile(r"(bank|rbi|sebi|income tax|police|court|government)\s*(manager|official|officer|department)", re.I), 0.20, "authority"),
     ScamIndicator(re.compile(r"(sbi|hdfc|icici|axis|kotak|pnb|bob|canara|union)\s*(bank)?", re.I), 0.12, "authority"),
     ScamIndicator(re.compile(r"your (account|number|card|kyc|pan|aadhaar) (is|has been|will be)", re.I), 0.15, "authority", True),
     ScamIndicator(re.compile(r"dear (customer|user|sir|madam|valued)", re.I), 0.10, "authority"),
+    ScamIndicator(re.compile(r"(senior|chief) (officer|manager|executive)", re.I), 0.12, "authority"),
+    ScamIndicator(re.compile(r"(cyber ?crime|telecom|trai|dot|ministry)", re.I), 0.16, "authority"),
+    ScamIndicator(re.compile(r"(this is|i am|calling from).{0,20}(department|branch|office|headquarters)", re.I), 0.14, "authority"),
+
+    # --- Financial / Payment Requests ---
     ScamIndicator(re.compile(r"send (money|amount|payment|fund|rs\.?|₹)", re.I), 0.20, "financial", True),
     ScamIndicator(re.compile(r"transfer (to|into|amount)|wire|remittance", re.I), 0.18, "financial"),
-    ScamIndicator(re.compile(r"(processing|activation|registration|delivery|customs) fee", re.I), 0.18, "financial", True),
+    ScamIndicator(re.compile(r"(processing|activation|registration|delivery|customs|handling) fee", re.I), 0.18, "financial", True),
     ScamIndicator(re.compile(r"pay (rs\.?|₹|inr)?\s*\d+", re.I), 0.20, "financial", True),
-    ScamIndicator(re.compile(r"upi.{0,5}(id|transfer|pay|send)|@(upi|ybl|paytm|okaxis|oksbi|apl|ibl)", re.I), 0.18, "financial"),
+    ScamIndicator(re.compile(r"upi.{0,5}(id|transfer|pay|send)|@(upi|ybl|paytm|okaxis|oksbi|apl|ibl|gpay|phonepe)", re.I), 0.18, "financial"),
+    ScamIndicator(re.compile(r"(send|return|refund).{0,15}(back|money|amount|rs|₹)", re.I), 0.18, "financial", True),
+    ScamIndicator(re.compile(r"(google pay|phonepe|paytm|bhim|gpay)", re.I), 0.10, "financial"),
+    ScamIndicator(re.compile(r"(bank account|account number|a/c)\s*\d{5,}", re.I), 0.16, "financial"),
+
+    # --- Verification / KYC ---
     ScamIndicator(re.compile(r"verify your (account|identity|details|kyc|pan|aadhaar)", re.I), 0.16, "verification", True),
     ScamIndicator(re.compile(r"kyc.{0,10}(update|expir|pending|incomplete|mandatory)", re.I), 0.18, "verification", True),
     ScamIndicator(re.compile(r"(update|confirm|share|send) your (details|otp|pin|password|cvv)", re.I), 0.20, "verification", True),
+
+    # --- OTP Fraud ---
     ScamIndicator(re.compile(r"(share|send|tell|provide|enter).{0,15}(otp|pin|cvv|password|mpin)", re.I), 0.22, "otp_fraud", True),
     ScamIndicator(re.compile(r"otp.{0,10}(sent|received|generated|code)", re.I), 0.15, "otp_fraud"),
+    ScamIndicator(re.compile(r"(need|require|want).{0,10}(otp|pin|password)", re.I), 0.18, "otp_fraud", True),
+
+    # --- Lottery / Prize ---
     ScamIndicator(re.compile(r"(won|winner|selected|chosen).{0,20}(prize|lottery|reward|cashback|gift)", re.I), 0.18, "lottery", True),
     ScamIndicator(re.compile(r"congratulat|lucky (winner|number|draw)|jackpot", re.I), 0.16, "lottery", True),
     ScamIndicator(re.compile(r"claim (your|now|prize|reward)|redeem", re.I), 0.14, "lottery", True),
+    ScamIndicator(re.compile(r"(lakh|crore|lakhs|crores).{0,10}(prize|won|reward|amount)", re.I), 0.16, "lottery", True),
+
+    # --- Job / Income Scam ---
     ScamIndicator(re.compile(r"work from home|earn.{0,15}(daily|weekly|monthly)|part.?time.{0,10}(job|income|earning)", re.I), 0.14, "job_scam", True),
     ScamIndicator(re.compile(r"(easy|quick|guaranteed|assured) (money|income|returns|profit)", re.I), 0.16, "job_scam", True),
+    ScamIndicator(re.compile(r"no (experience|investment) (needed|required)", re.I), 0.14, "job_scam"),
+    ScamIndicator(re.compile(r"(data entry|typing|copy paste|online).{0,10}(job|work|earning)", re.I), 0.12, "job_scam"),
+
+    # --- Threat / Legal ---
     ScamIndicator(re.compile(r"(account|number|card|sim).{0,10}(block|suspend|deactivat|freez|cancel)", re.I), 0.16, "threat", True),
     ScamIndicator(re.compile(r"legal (action|notice|proceedings)|arrest warrant|fir|complaint", re.I), 0.18, "threat", True),
     ScamIndicator(re.compile(r"if you (don'?t|do not|fail to)", re.I), 0.12, "threat", True),
+    ScamIndicator(re.compile(r"(police|cyber cell|ncrb).{0,10}(case|complaint|action)", re.I), 0.16, "threat", True),
+
+    # --- Phishing ---
     ScamIndicator(re.compile(r"click (here|this|below|the link)|tap (here|this|below)", re.I), 0.14, "phishing"),
+    ScamIndicator(re.compile(r"(secure|verify|update).{0,5}(link|url|portal|website)", re.I), 0.14, "phishing"),
+    ScamIndicator(re.compile(r"https?://[^\s]+\.(xyz|top|info|click|loan|win|buzz)", re.I), 0.18, "phishing"),
+
+    # --- Refund / Wrong Transfer (social engineering) ---
+    ScamIndicator(re.compile(r"(accidentally|mistakenly|by mistake|wrongly).{0,20}(sent|transfer|deposit|credit)", re.I), 0.22, "refund_scam", True),
+    ScamIndicator(re.compile(r"(wrong|incorrect).{0,10}(transfer|payment|account|person|number)", re.I), 0.20, "refund_scam", True),
+    ScamIndicator(re.compile(r"(send|return|refund|give).{0,5}(it |money |amount )?(back|return)", re.I), 0.20, "refund_scam", True),
+    ScamIndicator(re.compile(r"(check|verify).{0,10}(your|the) (account|balance|transaction)", re.I), 0.12, "refund_scam"),
+    ScamIndicator(re.compile(r"(money|amount|rs\.?|₹).{0,10}(should be|must be|is).{0,10}(there|in your|credited)", re.I), 0.16, "refund_scam", True),
+    ScamIndicator(re.compile(r"(please|kindly|pls).{0,10}(help|cooperate|assist|return)", re.I), 0.10, "refund_scam"),
+    ScamIndicator(re.compile(r"i'?m.{0,10}(in trouble|desperate|emergency|stuck)", re.I), 0.14, "refund_scam", True),
+
+    # --- Investment Scam ---
+    ScamIndicator(re.compile(r"(invest|trading|forex|stock).{0,15}(guaranteed|assured|fixed|daily) return", re.I), 0.18, "investment", True),
+    ScamIndicator(re.compile(r"(double|triple|10x).{0,10}(money|investment|return)", re.I), 0.18, "investment", True),
+    ScamIndicator(re.compile(r"sebi.{0,10}register|mutual fund.{0,10}guaranteed", re.I), 0.16, "investment"),
+
+    # --- Tech Support Scam ---
+    ScamIndicator(re.compile(r"(virus|malware|hack|breach).{0,15}(detected|found|your)", re.I), 0.16, "tech_support", True),
+    ScamIndicator(re.compile(r"(remote access|teamviewer|anydesk|download).{0,10}(install|connect|allow)", re.I), 0.20, "tech_support", True),
 ]
 
 HIGH_RISK_KEYWORDS = [
@@ -92,17 +142,31 @@ HIGH_RISK_KEYWORDS = [
     "account suspended", "verify identity", "confirm details",
     "processing fee", "activation fee", "delivery fee",
     "blocked account", "frozen account", "suspicious activity",
+    "send it back", "refund me", "return the money",
+    "wrong transfer", "accidental transfer", "by mistake",
+    "arrest warrant", "legal action", "account will be",
+    "compromised", "unauthorized", "unusual activity",
+]
+
+MEDIUM_RISK_KEYWORDS = [
+    "please help", "kindly cooperate", "do it now",
+    "immediately", "urgently", "at the earliest",
+    "share your", "send your", "provide your",
+    "employee id", "reference number", "case number",
+    "google pay", "phonepe", "paytm", "bhim",
+    "bank account", "upi id", "ifsc",
 ]
 
 TYPE_MAP = {
     "urgency": "generic", "authority": "bank_fraud", "financial": "upi_fraud",
     "verification": "kyc_scam", "otp_fraud": "otp_fraud", "lottery": "lottery_scam",
     "job_scam": "job_scam", "investment": "investment_scam", "threat": "threat_scam",
-    "phishing": "phishing",
+    "phishing": "phishing", "refund_scam": "upi_fraud", "tech_support": "tech_support",
 }
 
 
-def detect_scam(message: str) -> DetectionResult:
+def detect_scam(message: str, session_history: list[dict] | None = None) -> DetectionResult:
+    """Detect scam with cumulative session-level confidence boosting."""
     result = DetectionResult()
     pattern_score = 0.0
     matched_categories: dict[str, float] = {}
@@ -117,18 +181,47 @@ def detect_scam(message: str) -> DetectionResult:
             matched_categories[cat] = matched_categories.get(cat, 0) + ind.weight
             result.indicators.append({"category": cat, "weight": ind.weight})
 
+    # High-risk keyword scoring
     keyword_score = sum(0.12 for kw in HIGH_RISK_KEYWORDS if kw in message.lower())
+    keyword_score += sum(0.06 for kw in MEDIUM_RISK_KEYWORDS if kw in message.lower())
     keyword_score = min(keyword_score, 1.0)
 
+    # Behavioral signals
     behavioral_score = 0.0
     if len(message) > 200: behavioral_score += 0.1
     if message.isupper() or message.count("!") > 2: behavioral_score += 0.1
+    if re.search(r"₹|rs\.?\s*\d|inr\s*\d|\d+\s*(lakh|crore)", message, re.I):
+        behavioral_score += 0.12  # Financial context boost
 
-    raw = pattern_score * 0.50 + keyword_score * 0.25 + behavioral_score * 0.15
-    if has_urgency and raw > 0.15: raw *= 1.3
+    # History analysis — cumulative evidence from prior messages
+    history_score = 0.0
+    if session_history:
+        scammer_msgs = [m.get("text", "") for m in session_history if m.get("sender") != "agent"]
+        for prev_msg in scammer_msgs[-5:]:
+            for ind in SCAM_PATTERNS:
+                if ind.pattern.search(prev_msg):
+                    history_score += ind.weight * 0.3
+        history_score = min(history_score, 1.0)
+
+    # Combine scores (rebalanced weights)
+    raw = (
+        pattern_score * 0.45
+        + keyword_score * 0.25
+        + behavioral_score * 0.15
+        + history_score * 0.15
+    )
+
+    # Urgency boost
+    if has_urgency and raw > 0.10: raw *= 1.3
+
+    # Multi-category boost — if message triggers 3+ categories, it's almost certainly a scam
+    if len(matched_categories) >= 3:
+        raw = max(raw, 0.50)
+    elif len(matched_categories) >= 2:
+        raw *= 1.15
 
     result.confidence = min(round(raw, 4), 1.0)
-    result.is_scam = result.confidence >= 0.35
+    result.is_scam = result.confidence >= 0.30  # Lowered threshold for better recall
 
     if matched_categories:
         dominant = max(matched_categories, key=matched_categories.get)
@@ -138,6 +231,7 @@ def detect_scam(message: str) -> DetectionResult:
     result.urgency_level = "critical" if urgency_count >= 3 else "high" if urgency_count >= 2 else "medium" if urgency_count >= 1 else "low"
 
     return result
+
 
 # ═══════════════════════════════════════════════
 # Intelligence Extraction Engine
@@ -365,8 +459,8 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
     # Use conversation history from request OR session
     history = req.conversationHistory if req.conversationHistory else session["history"]
 
-    # 1. Detect scam
-    detection = detect_scam(message_text)
+    # 1. Detect scam (with session history for cumulative boosting)
+    detection = detect_scam(message_text, session_history=history)
     if detection.is_scam:
         session["scam_confidence"] = max(session["scam_confidence"], detection.confidence)
         session["scam_type"] = detection.scam_type
