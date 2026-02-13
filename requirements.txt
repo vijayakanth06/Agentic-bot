@@ -6,26 +6,9 @@
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
-websockets>=12.0
 
 # --- LLM ---
 groq>=0.4.0
 
-# --- Voice ---
-elevenlabs>=1.0.0
-twilio>=8.10.0
-
-# --- Database ---
-aiosqlite>=0.19.0
-
-# --- HTTP Client ---
-httpx>=0.25.0
-
-# --- Reports ---
-fpdf2>=2.7.0
-
 # --- Environment ---
 python-dotenv>=1.0.0
-
-# --- Audio Analysis ---
-numpy>=1.24.0
