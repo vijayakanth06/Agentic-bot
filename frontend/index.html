@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🍯 Agentic Honeypot — Live Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-card: #1a2332;
+            --bg-card-hover: #1f2b3d;
+            --accent: #f59e0b;
+            --accent-glow: rgba(245, 158, 11, 0.2);
+            --danger: #ef4444;
+            --success: #10b981;
+            --info: #3b82f6;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border: #1e293b;
+            --border-active: #334155;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* === Header === */
+        .header {
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, #1a1a2e 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .header h1 {
+            font-size: 20px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .header h1 .emoji { font-size: 28px; }
+        .header .badge {
+            background: var(--accent);
+            color: #000;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .status-bar {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+        .status-dot.online { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .status-dot.offline { background: var(--danger); }
+
+        /* === Stats Grid === */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            padding: 20px 24px;
+        }
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+        .stat-card:hover {
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--accent-glow);
+            transform: translateY(-2px);
+        }
+        .stat-card .label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent), #fbbf24);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .stat-card .sub {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* === Main Layout === */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 20px;
+            padding: 0 24px 24px;
+            max-height: calc(100vh - 220px);
+        }
+
+        /* === Session List === */
+        .sessions-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .panel-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .sessions-list {
+            overflow-y: auto;
+            flex: 1;
+            max-height: 500px;
+        }
+        .session-item {
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .session-item:hover { background: var(--bg-card-hover); }
+        .session-item.active { background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--accent); }
+        .session-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .session-icon.scam { background: rgba(239, 68, 68, 0.2); }
+        .session-icon.safe { background: rgba(16, 185, 129, 0.2); }
+        .session-icon.voice { background: rgba(139, 92, 246, 0.2); }
+        .session-info { flex: 1; }
+        .session-info .name { font-weight: 500; font-size: 14px; }
+        .session-info .meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+        .session-confidence {
+            font-size: 12px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 6px;
+        }
+        .confidence-high { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        .confidence-med { background: rgba(245, 158, 11, 0.2); color: var(--accent); }
+        .confidence-low { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+
+        /* === Detail Panel === */
+        .detail-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .detail-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .detail-header h3 { font-size: 14px; font-weight: 600; }
+        .detail-body {
+            padding: 16px 20px;
+            overflow-y: auto;
+            flex: 1;
+            max-height: 500px;
+        }
+
+        /* === Chat Messages === */
+        .chat-messages { display: flex; flex-direction: column; gap: 10px; }
+        .chat-msg {
+            padding: 10px 14px;
+            border-radius: 12px;
+            max-width: 85%;
+            font-size: 13px;
+            line-height: 1.5;
+            animation: fadeIn 0.3s ease;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .chat-msg.scammer {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+        .chat-msg.agent {
+            background: rgba(59, 130, 246, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+        .chat-msg .sender {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .chat-msg.scammer .sender { color: var(--danger); }
+        .chat-msg.agent .sender { color: var(--info); }
+
+        /* === Intel Items === */
+        .intel-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+        .intel-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            background: rgba(245, 158, 11, 0.08);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        .intel-type {
+            background: var(--accent);
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+        .intel-value { font-family: 'Courier New', monospace; font-weight: 500; word-break: break-all; }
+
+        /* === Controls === */
+        .controls {
+            padding: 12px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 8px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: none;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: 'Inter', sans-serif;
+        }
+        .btn:hover { transform: translateY(-1px); }
+        .btn-primary { background: var(--accent); color: #000; }
+        .btn-primary:hover { box-shadow: 0 4px 12px var(--accent-glow); }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
+        .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* === Test Input === */
+        .test-panel {
+            padding: 20px 24px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+        }
+        .test-input-group {
+            display: flex;
+            gap: 10px;
+        }
+        .test-input {
+            flex: 1;
+            padding: 10px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+        }
+        .test-input:focus { outline: none; border-color: var(--accent); }
+        .test-input::placeholder { color: var(--text-muted); }
+
+        /* === Live Feed === */
+        .live-feed {
+            max-height: 120px;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+        .feed-item {
+            font-size: 11px;
+            padding: 4px 12px;
+            color: var(--text-muted);
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .feed-item .time { color: var(--text-muted); font-family: monospace; }
+        .feed-item.scam { color: var(--danger); }
+        .feed-item.handoff { color: var(--accent); }
+        .feed-item.voice { color: #8b5cf6; }
+
+        /* === Tabs === */
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+        }
+        .tab {
+            padding: 10px 20px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            color: var(--text-muted);
+            transition: all 0.2s;
+        }
+        .tab:hover { color: var(--text-primary); }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* === Responsive === */
+        @media (max-width: 900px) {
+            .main-grid { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>
+            <span class="emoji">🍯</span>
+            Agentic Honeypot
+            <span class="badge">LIVE</span>
+        </h1>
+        <div class="status-bar">
+            <span><span class="status-dot online" id="wsStatus"></span> <span id="wsLabel">Connecting...</span></span>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="label">Total Sessions</div>
+            <div class="value" id="statSessions">0</div>
+            <div class="sub">Messages & Calls</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Scams Detected</div>
+            <div class="value" id="statScams">0</div>
+            <div class="sub">Auto-detected</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Intel Extracted</div>
+            <div class="value" id="statIntel">0</div>
+            <div class="sub">UPI, Phone, URLs</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Messages</div>
+            <div class="value" id="statMessages">0</div>
+            <div class="sub">Across all sessions</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Active Now</div>
+            <div class="value" id="statActive">0</div>
+            <div class="sub">Live conversations</div>
+        </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="main-grid">
+        <!-- Sessions List -->
+        <div class="sessions-panel">
+            <div class="panel-header">
+                <span>📋 Sessions</span>
+                <button class="btn btn-outline" onclick="refreshSessions()">↻ Refresh</button>
+            </div>
+            <div class="live-feed" id="liveFeed"></div>
+            <div class="sessions-list" id="sessionsList">
+                <div style="padding: 40px; text-align: center; color: var(--text-muted);">
+                    No sessions yet. Send a test message below.
+                </div>
+            </div>
+        </div>
+
+        <!-- Detail Panel -->
+        <div class="detail-panel">
+            <div class="detail-header">
+                <h3 id="detailTitle">Select a session</h3>
+            </div>
+            <div class="tabs">
+                <div class="tab active" data-tab="chat" onclick="switchTab('chat')">💬 Chat</div>
+                <div class="tab" data-tab="intel" onclick="switchTab('intel')">🔍 Intel</div>
+                <div class="tab" data-tab="info" onclick="switchTab('info')">ℹ️ Info</div>
+            </div>
+            <div class="detail-body">
+                <div class="tab-content active" id="tabChat">
+                    <div class="chat-messages" id="chatMessages">
+                        <div style="text-align: center; color: var(--text-muted); padding: 40px;">
+                            Select a session to view messages
+                        </div>
+                    </div>
+                </div>
+                <div class="tab-content" id="tabIntel">
+                    <div class="intel-list" id="intelList">
+                        <div style="text-align: center; color: var(--text-muted); padding: 40px;">
+                            No intelligence extracted yet
+                        </div>
+                    </div>
+                </div>
+                <div class="tab-content" id="tabInfo">
+                    <div id="sessionInfo" style="padding: 20px; color: var(--text-muted);">
+                        Select a session
+                    </div>
+                </div>
+            </div>
+            <div class="controls">
+                <button class="btn btn-primary" id="btnHandoff" onclick="toggleHandoff()" disabled>🤖 Activate AI</button>
+                <button class="btn btn-outline" id="btnReport" onclick="downloadReport()" disabled>📄 Report</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Test Input -->
+    <div class="test-panel">
+        <div class="test-input-group">
+            <input type="text" class="test-input" id="testInput"
+                placeholder="Send a test scam message (e.g., 'Your account is blocked. Send Rs.5000 to verify...')"
+                onkeydown="if(event.key==='Enter')sendTest()">
+            <button class="btn btn-primary" onclick="sendTest()">📤 Send</button>
+            <button class="btn btn-danger" onclick="sendScamPreset()">⚠️ Scam Test</button>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let ws = null;
+        let currentSession = null;
+
+        // === WebSocket ===
+        function connectWS() {
+            const wsUrl = `${API_BASE.replace('http', 'ws')}/ws/dashboard`;
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => {
+                document.getElementById('wsStatus').className = 'status-dot online';
+                document.getElementById('wsLabel').textContent = 'Connected';
+            };
+            ws.onclose = () => {
+                document.getElementById('wsStatus').className = 'status-dot offline';
+                document.getElementById('wsLabel').textContent = 'Disconnected';
+                setTimeout(connectWS, 3000);
+            };
+            ws.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                handleWSEvent(data);
+            };
+        }
+
+        function handleWSEvent(data) {
+            addFeedItem(data);
+            if (data.session_id === currentSession) {
+                loadSessionDetail(currentSession);
+            }
+            refreshStats();
+            refreshSessions();
+        }
+
+        function addFeedItem(data) {
+            const feed = document.getElementById('liveFeed');
+            const time = new Date().toLocaleTimeString();
+            let cls = '';
+            let text = '';
+
+            if (data.type === 'message') {
+                cls = data.confidence > 0.35 ? 'scam' : '';
+                text = `Session ${data.session_id.slice(0,8)} — Turn ${data.turn} | Confidence: ${(data.confidence*100).toFixed(0)}%`;
+            } else if (data.type === 'handoff') {
+                cls = 'handoff';
+                text = `🤖 Hand-off: ${data.session_id.slice(0,8)} → ${data.mode}`;
+            } else if (data.type === 'call_incoming') {
+                cls = 'voice';
+                text = `📞 Incoming call from ${data.from}`;
+            } else if (data.type === 'voice_turn') {
+                cls = 'voice';
+                text = `🎤 Voice: "${data.scammer_said?.slice(0,40)}..." → "${data.agent_said?.slice(0,40)}..."`;
+            }
+
+            const item = document.createElement('div');
+            item.className = `feed-item ${cls}`;
+            item.innerHTML = `<span class="time">${time}</span> ${text}`;
+            feed.insertBefore(item, feed.firstChild);
+            if (feed.children.length > 20) feed.removeChild(feed.lastChild);
+        }
+
+        // === API Calls ===
+        async function refreshStats() {
+            try {
+                const res = await fetch(`${API_BASE}/api/dashboard`);
+                const data = await res.json();
+                document.getElementById('statSessions').textContent = data.total_sessions || 0;
+                document.getElementById('statScams').textContent = data.scams_detected || 0;
+                document.getElementById('statIntel').textContent = data.intelligence_items || 0;
+                document.getElementById('statMessages').textContent = data.total_messages || 0;
+                document.getElementById('statActive').textContent = data.active_sessions || 0;
+            } catch (e) { console.error('Stats error:', e); }
+        }
+
+        async function refreshSessions() {
+            try {
+                const res = await fetch(`${API_BASE}/api/sessions`);
+                const data = await res.json();
+                renderSessions(data.sessions || []);
+            } catch (e) { console.error('Sessions error:', e); }
+        }
+
+        function renderSessions(sessions) {
+            const list = document.getElementById('sessionsList');
+            if (!sessions.length) {
+                list.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">No sessions yet.</div>';
+                return;
+            }
+            list.innerHTML = sessions.map(s => {
+                const isVoice = s.channel === 'voice';
+                const conf = s.scam_confidence || 0;
+                const confCls = conf >= 0.6 ? 'confidence-high' : conf >= 0.35 ? 'confidence-med' : 'confidence-low';
+                const iconCls = isVoice ? 'voice' : (conf >= 0.35 ? 'scam' : 'safe');
+                const icon = isVoice ? '📞' : (conf >= 0.35 ? '⚠️' : '💬');
+                const active = s.session_id === currentSession ? 'active' : '';
+                return `
+                    <div class="session-item ${active}" onclick="loadSessionDetail('${s.session_id}')">
+                        <div class="session-icon ${iconCls}">${icon}</div>
+                        <div class="session-info">
+                            <div class="name">${s.session_id.slice(0,12)}...</div>
+                            <div class="meta">${s.scam_type || 'unknown'} | ${s.state || 'INITIAL'} | T${s.turn_count || 0}</div>
+                        </div>
+                        <span class="session-confidence ${confCls}">${(conf*100).toFixed(0)}%</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function loadSessionDetail(sessionId) {
+            currentSession = sessionId;
+            document.getElementById('detailTitle').textContent = `Session: ${sessionId.slice(0,12)}...`;
+            document.getElementById('btnHandoff').disabled = false;
+            document.getElementById('btnReport').disabled = false;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
+                const data = await res.json();
+
+                // Chat messages
+                const chatEl = document.getElementById('chatMessages');
+                if (data.messages?.length) {
+                    chatEl.innerHTML = data.messages.map(m => `
+                        <div class="chat-msg ${m.sender === 'scammer' ? 'scammer' : 'agent'}">
+                            <div class="sender">${m.sender === 'scammer' ? '🔴 Scammer' : '🤖 Honeypot'}</div>
+                            ${m.text}
+                        </div>
+                    `).join('');
+                    chatEl.scrollTop = chatEl.scrollHeight;
+                } else {
+                    chatEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:40px;">No messages</div>';
+                }
+
+                // Intelligence
+                const intelEl = document.getElementById('intelList');
+                if (data.intelligence?.length) {
+                    intelEl.innerHTML = data.intelligence.map(i => `
+                        <div class="intel-item">
+                            <span class="intel-type">${i.type}</span>
+                            <span class="intel-value">${i.value}</span>
+                        </div>
+                    `).join('');
+                } else {
+                    intelEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:40px;">No intel yet</div>';
+                }
+
+                // Session info
+                const s = data.session;
+                document.getElementById('sessionInfo').innerHTML = `
+                    <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;">
+                        <div><strong>ID:</strong> ${s.session_id}</div>
+                        <div><strong>Channel:</strong> ${s.channel}</div>
+                        <div><strong>Scam Type:</strong> ${s.scam_type}</div>
+                        <div><strong>Confidence:</strong> ${((s.scam_confidence||0)*100).toFixed(1)}%</div>
+                        <div><strong>State:</strong> ${s.state}</div>
+                        <div><strong>Turns:</strong> ${s.turn_count}</div>
+                        <div><strong>Hand-off:</strong> ${s.handoff_mode}</div>
+                        <div><strong>Intel Items:</strong> ${s.total_extracted || 0}</div>
+                        <div><strong>Created:</strong> ${s.created_at}</div>
+                    </div>
+                `;
+
+                // Update handoff button
+                const mode = data.handoff?.mode || 'user';
+                const btn = document.getElementById('btnHandoff');
+                if (mode === 'ai_agent') {
+                    btn.textContent = '👤 Take Control';
+                    btn.className = 'btn btn-danger';
+                } else {
+                    btn.textContent = '🤖 Activate AI';
+                    btn.className = 'btn btn-primary';
+                }
+
+                refreshSessions();
+            } catch (e) { console.error('Detail error:', e); }
+        }
+
+        async function toggleHandoff() {
+            if (!currentSession) return;
+            const btn = document.getElementById('btnHandoff');
+            const isActive = btn.textContent.includes('Take Control');
+            const action = isActive ? 'deactivate' : 'activate';
+
+            try {
+                await fetch(`${API_BASE}/api/handoff`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: currentSession, action })
+                });
+                loadSessionDetail(currentSession);
+            } catch (e) { console.error('Handoff error:', e); }
+        }
+
+        async function downloadReport() {
+            if (!currentSession) return;
+            window.open(`${API_BASE}/api/reports/${currentSession}`, '_blank');
+        }
+
+        async function sendTest() {
+            const input = document.getElementById('testInput');
+            const text = input.value.trim();
+            if (!text) return;
+
+            const sessionId = currentSession || `test-${Date.now()}`;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/honeypot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sessionId,
+                        message: { sender: 'scammer', text, timestamp: Date.now() },
+                        conversationHistory: [],
+                        metadata: { channel: 'dashboard' }
+                    })
+                });
+                const data = await res.json();
+                input.value = '';
+                currentSession = sessionId;
+                loadSessionDetail(sessionId);
+                refreshStats();
+                refreshSessions();
+            } catch (e) { console.error('Send error:', e); alert('Failed to send. Is the server running?'); }
+        }
+
+        function sendScamPreset() {
+            const presets = [
+                "Dear Customer, Your SBI account has been blocked due to incomplete KYC. Update immediately: bit.ly/sbi-kyc or call 9876543210",
+                "Congratulations! You won Rs.50000 cashback! Send Rs.500 processing fee to scammer@ybl immediately",
+                "This is HDFC Bank. Share your OTP to verify account. Your account will be suspended if not verified.",
+                "Work from home opportunity! Earn Rs.30000/week. Registration fee Rs.1000. Contact: jobs@scam.tk",
+                "Your account shows suspicious activity. Transfer Rs.10000 to secure it. Account: 12345678901 IFSC: SBIN0001234"
+            ];
+            document.getElementById('testInput').value = presets[Math.floor(Math.random() * presets.length)];
+            sendTest();
+        }
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+            document.getElementById(`tab${tabId.charAt(0).toUpperCase() + tabId.slice(1)}`).classList.add('active');
+        }
+
+        // === Init ===
+        connectWS();
+        refreshStats();
+        refreshSessions();
+        setInterval(refreshStats, 10000);
+    </script>
+</body>
+</html>

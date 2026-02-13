@@ -75,3 +75,18 @@ package-lock.json
 # Temporary files
 tmp/
 temp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Project runtime
+honeypot.db
+temp_audio/
+reports/*.pdf
+test_report.pdf
+.vercel/
