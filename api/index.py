@@ -487,6 +487,12 @@ async def voice_detect_endpoint(
     }
 
 
+# Also handle POST at root (in case GUVI tester sends to base URL)
+@app.post("/")
+async def root_post(req: HoneypotRequest, x_api_key: str = Header(None)):
+    return await honeypot_endpoint(req, x_api_key)
+
+
 # Backward compat
 @app.post("/api/conversation")
 async def conversation_compat(req: HoneypotRequest, x_api_key: str = Header(None)):
