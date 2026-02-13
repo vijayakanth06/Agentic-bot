@@ -134,6 +134,26 @@ SCAM_PATTERNS = [
     # --- Tech Support Scam ---
     ScamIndicator(re.compile(r"(virus|malware|hack|breach).{0,15}(detected|found|your)", re.I), 0.16, "tech_support", True),
     ScamIndicator(re.compile(r"(remote access|teamviewer|anydesk|download).{0,10}(install|connect|allow)", re.I), 0.20, "tech_support", True),
+    ScamIndicator(re.compile(r"(microsoft|windows|apple).{0,10}(security|support|license)", re.I), 0.14, "tech_support"),
+
+    # --- Delivery / Customs ---
+    ScamIndicator(re.compile(r"(parcel|package|shipment|courier).{0,15}(held|stuck|customs|returned)", re.I), 0.18, "financial", True),
+    ScamIndicator(re.compile(r"(customs|clearance|delivery).{0,10}(fee|charge|duty|payment)", re.I), 0.20, "financial", True),
+    ScamIndicator(re.compile(r"(india post|fedex|dhl|bluedart).{0,15}(delivery|payment|customs)", re.I), 0.14, "authority"),
+    ScamIndicator(re.compile(r"tracking.{0,5}(id|number|code)", re.I), 0.08, "authority"),
+    ScamIndicator(re.compile(r"(parcel|package).{0,10}(destroy|return|dispose)", re.I), 0.16, "threat", True),
+
+    # --- Insurance / Pension Fraud ---
+    ScamIndicator(re.compile(r"(lic|insurance|pension|policy).{0,15}(lapse|expire|mature|bonus|claim)", re.I), 0.18, "financial", True),
+    ScamIndicator(re.compile(r"(maturity|surrender|bonus).{0,10}(amount|value|ready|disburs)", re.I), 0.16, "financial", True),
+    ScamIndicator(re.compile(r"(policyholder|policy number|policy.{0,3}no)", re.I), 0.10, "authority"),
+    ScamIndicator(re.compile(r"(lic|irda|irdai).{0,10}(head office|department|registered)", re.I), 0.14, "authority"),
+
+    # --- Utility / Bill Disconnection ---
+    ScamIndicator(re.compile(r"(electricity|power|gas|water).{0,15}(disconnect|cut|shut|pending|overdue)", re.I), 0.18, "threat", True),
+    ScamIndicator(re.compile(r"(pending|overdue|unpaid).{0,10}(bill|amount|dues|payment)", re.I), 0.16, "financial", True),
+    ScamIndicator(re.compile(r"consumer.{0,5}(id|number|no)", re.I), 0.08, "authority"),
+    ScamIndicator(re.compile(r"(permanent|immediate).{0,10}(disconnect|disconnection|cut)", re.I), 0.16, "threat", True),
 ]
 
 HIGH_RISK_KEYWORDS = [
@@ -146,6 +166,11 @@ HIGH_RISK_KEYWORDS = [
     "wrong transfer", "accidental transfer", "by mistake",
     "arrest warrant", "legal action", "account will be",
     "compromised", "unauthorized", "unusual activity",
+    "customs duty", "clearance fee", "held at customs",
+    "policy lapse", "maturity bonus", "lic",
+    "electricity disconnection", "power cut", "bill overdue",
+    "remote access", "teamviewer", "anydesk",
+    "double your money", "guaranteed returns", "forex trading",
 ]
 
 MEDIUM_RISK_KEYWORDS = [
@@ -155,6 +180,9 @@ MEDIUM_RISK_KEYWORDS = [
     "employee id", "reference number", "case number",
     "google pay", "phonepe", "paytm", "bhim",
     "bank account", "upi id", "ifsc",
+    "customs", "parcel", "disconnection", "overdue",
+    "insurance", "maturity", "policy", "pension",
+    "virus detected", "malware", "remote access",
 ]
 
 TYPE_MAP = {
@@ -245,6 +273,10 @@ EXTRACT_PATTERNS = [
     {"type": "name", "pattern": re.compile(r"(?:(?:my name is|i am|this is|i'?m|call me)\s+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", re.I), "confidence": 0.70},
     {"type": "ifsc", "pattern": re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b"), "confidence": 0.90},
     {"type": "email", "pattern": re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", re.I), "confidence": 0.85},
+    # Misc identifiers for richer extraction
+    {"type": "employee_id", "pattern": re.compile(r"(?:employee|emp|staff)\s*(?:id|no|number|#)[\s:.-]*(\w{2,10})", re.I), "confidence": 0.70},
+    {"type": "reference_id", "pattern": re.compile(r"(?:ref(?:erence)?|case|ticket|tracking)\s*(?:id|no|number|#)?[\s:.-]*([A-Z0-9-]{4,20})", re.I), "confidence": 0.75},
+    {"type": "policy_id", "pattern": re.compile(r"(?:policy|consumer|customer)\s*(?:id|no|number|#)[\s:.-]*([A-Z0-9-]{4,20})", re.I), "confidence": 0.70},
 ]
 
 _seen_intel: dict[str, set] = {}  # session_id -> set of seen dedup keys
