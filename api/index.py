@@ -1,8 +1,9 @@
 """
-Agentic Honeypot — Vercel Serverless Function (Self-Contained).
+Agentic Honeypot — Self-Contained FastAPI Server with PostgreSQL.
 
-Single-file FastAPI app with all logic inline for reliable Vercel deployment.
-Handles: POST /api/honeypot (Problem 2) + POST /api/voice/detect (Problem 1)
+Single-file FastAPI app with all logic inline.
+Handles: POST /api/honeypot, POST /api/voice/detect, POST /api/tts
+         POST /api/session/end, GET /api/admin/*, GET /admin
 """
 
 import os
@@ -11,6 +12,7 @@ import json
 import asyncio
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -19,8 +21,9 @@ except ImportError:
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Header, UploadFile, File
+from fastapi import FastAPI, HTTPException, Header, UploadFile, File, Query
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -38,17 +41,167 @@ PERSONA_AGE = os.environ.get("PERSONA_AGE", "28")
 PERSONA_OCCUPATION = os.environ.get("PERSONA_OCCUPATION", "Software Engineer at Grootan")
 PERSONA_LOCATION = os.environ.get("PERSONA_LOCATION", "Perundurai")
 
-ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1"
 
+# PostgreSQL — build URL from individual env vars or use DATABASE_URL directly
+_PG_HOST = os.environ.get("POSTGRES_HOST", "localhost")
+_PG_PORT = os.environ.get("POSTGRES_PORT", "5433")
+_PG_DB = os.environ.get("POSTGRES_DB", "honeypot")
+_PG_USER = os.environ.get("POSTGRES_USER", "postgres")
+_PG_PASS = os.environ.get("POSTGRES_PASSWORD", "")
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    f"postgresql://{_PG_USER}:{_PG_PASS}@{_PG_HOST}:{_PG_PORT}/{_PG_DB}"
+)
+
 # ═══════════════════════════════════════════════
-# FastAPI App
+# PostgreSQL Database Layer
 # ═══════════════════════════════════════════════
 
-app = FastAPI(title="Agentic Honeypot", version="2.0.0")
+_pool = None  # asyncpg connection pool
+
+
+async def get_pool():
+    """Lazy-init and return the asyncpg connection pool."""
+    global _pool
+    if _pool is None:
+        try:
+            import asyncpg
+            _pool = await asyncpg.create_pool(
+                DATABASE_URL,
+                min_size=2,
+                max_size=10,
+                command_timeout=15,
+            )
+            print("[DB] Connection pool created")
+        except Exception as e:
+            print(f"[DB ERROR] Could not connect to PostgreSQL: {e}")
+            return None
+    return _pool
+
+
+async def init_db():
+    """Create tables if they don't exist."""
+    pool = await get_pool()
+    if not pool:
+        print("[DB] Skipping table creation — no database connection")
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                persona JSONB NOT NULL DEFAULT '{}',
+                scam_type TEXT NOT NULL DEFAULT 'unknown',
+                scam_confidence REAL NOT NULL DEFAULT 0.0,
+                urgency_level TEXT NOT NULL DEFAULT 'low',
+                turn_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'ended',
+                started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                ended_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                sender TEXT NOT NULL,
+                text TEXT NOT NULL,
+                timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                seq INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS intelligence (
+                id SERIAL PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                type TEXT NOT NULL,
+                value TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.0,
+                extracted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+            CREATE INDEX IF NOT EXISTS idx_intelligence_session ON intelligence(session_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+            CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
+        """)
+        print("[DB] Tables ready")
+
+
+async def save_session_to_db(session_id: str, session_data: dict, persona: dict):
+    """Persist a complete session (messages + intelligence + metadata) to PostgreSQL."""
+    pool = await get_pool()
+    if not pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Upsert session record
+            await conn.execute("""
+                INSERT INTO sessions (id, persona, scam_type, scam_confidence, turn_count, status, started_at, ended_at)
+                VALUES ($1, $2::jsonb, $3, $4, $5, 'ended', $6, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    persona = EXCLUDED.persona,
+                    scam_type = EXCLUDED.scam_type,
+                    scam_confidence = EXCLUDED.scam_confidence,
+                    turn_count = EXCLUDED.turn_count,
+                    status = 'ended',
+                    ended_at = NOW()
+            """,
+                session_id,
+                json.dumps(persona),  # asyncpg JSONB accepts pre-serialized JSON strings
+                session_data.get("scam_type", "unknown"),
+                session_data.get("scam_confidence", 0.0),
+                session_data.get("turn_count", 0),
+                session_data.get("started_at", datetime.now(timezone.utc)),
+            )
+
+            # Delete existing messages/intelligence for idempotency on re-save
+            await conn.execute("DELETE FROM messages WHERE session_id = $1", session_id)
+            await conn.execute("DELETE FROM intelligence WHERE session_id = $1", session_id)
+
+            # Insert messages
+            history = session_data.get("history", [])
+            for seq, msg in enumerate(history):
+                await conn.execute(
+                    "INSERT INTO messages (session_id, sender, text, seq) VALUES ($1, $2, $3, $4)",
+                    session_id, msg.get("sender", "unknown"), msg.get("text", ""), seq,
+                )
+
+            # Insert intelligence items
+            intel_items = session_data.get("intelligence", [])
+            for item in intel_items:
+                await conn.execute(
+                    "INSERT INTO intelligence (session_id, type, value, confidence) VALUES ($1, $2, $3, $4)",
+                    session_id, item.get("type", ""), item.get("value", ""), item.get("confidence", 0.0),
+                )
+
+    return True
+
+
+# ═══════════════════════════════════════════════
+# FastAPI App with Lifespan
+# ═══════════════════════════════════════════════
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize DB on startup, close pool on shutdown."""
+    await init_db()
+    yield
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
+        print("[DB] Pool closed")
+
+app = FastAPI(title="Agentic Honeypot", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# In-memory session store
+# In-memory session store (live sessions — flushed to DB on end)
 sessions: dict[str, dict] = {}
 
 # ═══════════════════════════════════════════════
@@ -293,9 +446,15 @@ EXTRACT_PATTERNS = [
 ]
 
 _seen_intel: dict[str, set] = {}  # session_id -> set of seen dedup keys
+_MAX_TRACKED_SESSIONS = 500  # Safety bound to prevent unbounded memory growth
 
 
 def extract_intelligence(message: str, session_id: str = "") -> list[dict]:
+    # Evict oldest tracked sessions if memory bound exceeded
+    if len(_seen_intel) > _MAX_TRACKED_SESSIONS:
+        oldest_keys = list(_seen_intel.keys())[: len(_seen_intel) - _MAX_TRACKED_SESSIONS]
+        for k in oldest_keys:
+            _seen_intel.pop(k, None)
     seen = _seen_intel.setdefault(session_id, set())
     items = []
     for spec in EXTRACT_PATTERNS:
@@ -314,10 +473,6 @@ def extract_intelligence(message: str, session_id: str = "") -> list[dict]:
                 continue
             items.append({"type": spec["type"], "value": value, "confidence": spec["confidence"]})
     return items
-
-# ═══════════════════════════════════════════════
-# LLM Client (GROQ Llama 3.3)
-# ═══════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════
 # LLM Client (GROQ Llama 3.3)
@@ -513,6 +668,8 @@ def get_session(session_id: str) -> dict:
             "scam_confidence": 0.0,
             "scam_type": "unknown",
             "turn_count": 0,
+            "started_at": datetime.now(timezone.utc),
+            "persona": {},
         }
     return sessions[session_id]
 
@@ -532,7 +689,8 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "groq": bool(GROQ_API_KEY)}
+    db_ok = _pool is not None
+    return {"status": "ok", "groq": bool(GROQ_API_KEY), "database": db_ok}
 
 
 @app.post("/api/honeypot")
@@ -548,8 +706,9 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
         raise HTTPException(status_code=400, detail="Empty message")
 
     session = get_session(session_id)
-
-    # Use conversation history from request OR session
+    # Persist persona into session for later DB save
+    if req.persona:
+        session["persona"] = req.persona
     history = req.conversationHistory if req.conversationHistory else session["history"]
 
     # 1. Detect scam (with session history for cumulative boosting)
@@ -761,6 +920,292 @@ async def root_post(req: HoneypotRequest, x_api_key: str = Header(None)):
 @app.post("/api/conversation")
 async def conversation_compat(req: HoneypotRequest, x_api_key: str = Header(None)):
     return await honeypot_endpoint(req, x_api_key)
+
+
+# ═══════════════════════════════════════════════
+# End Session — Save to Database
+# ═══════════════════════════════════════════════
+
+class EndSessionRequest(BaseModel):
+    sessionId: str
+    persona: dict = {}
+
+@app.post("/api/session/end")
+async def end_session(req: EndSessionRequest):
+    """End a session and persist all data to PostgreSQL."""
+    session_id = req.sessionId
+    if not session_id:
+        raise HTTPException(status_code=400, detail="sessionId is required")
+
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found in memory")
+
+    persona = req.persona or session.get("persona", {})
+
+    try:
+        await save_session_to_db(session_id, session, persona)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[END SESSION ERROR] {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save session: {str(e)}")
+
+    # Clean up memory
+    sessions.pop(session_id, None)
+    _seen_intel.pop(session_id, None)
+
+    return {
+        "status": "success",
+        "message": "Session saved to database",
+        "sessionId": session_id,
+        "summary": {
+            "turn_count": session.get("turn_count", 0),
+            "scam_type": session.get("scam_type", "unknown"),
+            "scam_confidence": session.get("scam_confidence", 0.0),
+            "intelligence_count": len(session.get("intelligence", [])),
+            "message_count": len(session.get("history", [])),
+        },
+    }
+
+
+# ═══════════════════════════════════════════════
+# Admin API Endpoints
+# ═══════════════════════════════════════════════
+
+@app.get("/admin")
+async def admin_page():
+    """Serve the admin dashboard HTML."""
+    base = Path(__file__).resolve().parent.parent
+    html_path = base / "frontend" / "admin.html"
+    if html_path.exists():
+        return FileResponse(html_path, media_type="text/html")
+    return HTMLResponse("<h1>Admin page not found</h1><p>Place admin.html in frontend/</p>")
+
+
+@app.get("/api/admin/stats")
+async def admin_stats():
+    """Get dashboard statistics."""
+    pool = await get_pool()
+    if not pool:
+        return {"error": "Database not available", "total_sessions": 0}
+
+    async with pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM sessions")
+        scam_detected = await conn.fetchval("SELECT COUNT(*) FROM sessions WHERE scam_confidence >= 0.3")
+        avg_conf = await conn.fetchval("SELECT COALESCE(AVG(scam_confidence), 0) FROM sessions")
+        total_msgs = await conn.fetchval("SELECT COUNT(*) FROM messages")
+        total_intel = await conn.fetchval("SELECT COUNT(*) FROM intelligence")
+
+        # Scam type breakdown
+        type_rows = await conn.fetch(
+            "SELECT scam_type, COUNT(*) as cnt FROM sessions GROUP BY scam_type ORDER BY cnt DESC"
+        )
+        scam_types = {r["scam_type"]: r["cnt"] for r in type_rows}
+
+        # Recent 7 days session count
+        recent_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM sessions WHERE started_at >= NOW() - INTERVAL '7 days'"
+        )
+
+    return {
+        "total_sessions": total,
+        "scam_detected": scam_detected,
+        "average_confidence": round(float(avg_conf), 4),
+        "total_messages": total_msgs,
+        "total_intelligence": total_intel,
+        "scam_type_breakdown": scam_types,
+        "sessions_last_7_days": recent_count,
+        "live_sessions": len(sessions),
+    }
+
+
+@app.get("/api/admin/sessions")
+async def admin_list_sessions(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    scam_type: Optional[str] = Query(None),
+):
+    """List all saved sessions with pagination."""
+    pool = await get_pool()
+    if not pool:
+        return {"error": "Database not available", "sessions": []}
+
+    offset = (page - 1) * limit
+    async with pool.acquire() as conn:
+        # Count total
+        if scam_type:
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM sessions WHERE scam_type = $1", scam_type
+            )
+            rows = await conn.fetch(
+                """SELECT id, persona, scam_type, scam_confidence, turn_count, status,
+                          started_at, ended_at
+                   FROM sessions WHERE scam_type = $1
+                   ORDER BY started_at DESC LIMIT $2 OFFSET $3""",
+                scam_type, limit, offset,
+            )
+        else:
+            total = await conn.fetchval("SELECT COUNT(*) FROM sessions")
+            rows = await conn.fetch(
+                """SELECT id, persona, scam_type, scam_confidence, turn_count, status,
+                          started_at, ended_at
+                   FROM sessions ORDER BY started_at DESC LIMIT $1 OFFSET $2""",
+                limit, offset,
+            )
+
+    session_list = []
+    for r in rows:
+        persona_data = json.loads(r["persona"]) if isinstance(r["persona"], str) else r["persona"]
+        session_list.append({
+            "id": r["id"],
+            "persona": persona_data,
+            "scam_type": r["scam_type"],
+            "scam_confidence": r["scam_confidence"],
+            "turn_count": r["turn_count"],
+            "status": r["status"],
+            "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+            "ended_at": r["ended_at"].isoformat() if r["ended_at"] else None,
+        })
+
+    return {
+        "sessions": session_list,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": (total + limit - 1) // limit if total else 0,
+    }
+
+
+@app.get("/api/admin/sessions/{session_id}")
+async def admin_get_session(session_id: str):
+    """Get full session detail including messages and intelligence."""
+    pool = await get_pool()
+    if not pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with pool.acquire() as conn:
+        session_row = await conn.fetchrow(
+            "SELECT * FROM sessions WHERE id = $1", session_id
+        )
+        if not session_row:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        messages = await conn.fetch(
+            "SELECT sender, text, timestamp, seq FROM messages WHERE session_id = $1 ORDER BY seq",
+            session_id,
+        )
+        intel_items = await conn.fetch(
+            "SELECT type, value, confidence, extracted_at FROM intelligence WHERE session_id = $1",
+            session_id,
+        )
+
+    persona_data = (
+        json.loads(session_row["persona"])
+        if isinstance(session_row["persona"], str)
+        else session_row["persona"]
+    )
+
+    return {
+        "id": session_row["id"],
+        "persona": persona_data,
+        "scam_type": session_row["scam_type"],
+        "scam_confidence": session_row["scam_confidence"],
+        "turn_count": session_row["turn_count"],
+        "status": session_row["status"],
+        "started_at": session_row["started_at"].isoformat() if session_row["started_at"] else None,
+        "ended_at": session_row["ended_at"].isoformat() if session_row["ended_at"] else None,
+        "messages": [
+            {
+                "sender": m["sender"],
+                "text": m["text"],
+                "timestamp": m["timestamp"].isoformat() if m["timestamp"] else None,
+                "seq": m["seq"],
+            }
+            for m in messages
+        ],
+        "intelligence": [
+            {
+                "type": i["type"],
+                "value": i["value"],
+                "confidence": i["confidence"],
+                "extracted_at": i["extracted_at"].isoformat() if i["extracted_at"] else None,
+            }
+            for i in intel_items
+        ],
+    }
+
+
+@app.delete("/api/admin/sessions/{session_id}")
+async def admin_delete_session(session_id: str):
+    """Delete a session and all its data."""
+    pool = await get_pool()
+    if not pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    async with pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM sessions WHERE id = $1", session_id)
+    # asyncpg returns 'DELETE N' — extract count safely
+    try:
+        deleted_count = int(result.split()[-1])
+    except (ValueError, IndexError):
+        deleted_count = 0
+    if deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return {"status": "success", "message": f"Session {session_id} deleted"}
+
+
+@app.get("/api/admin/settings")
+async def admin_get_settings():
+    """Get all persisted settings."""
+    pool = await get_pool()
+    if not pool:
+        # Return defaults if no DB
+        return {
+            "settings": {
+                "persona": {
+                    "name": PERSONA_NAME,
+                    "age": PERSONA_AGE,
+                    "occupation": PERSONA_OCCUPATION,
+                    "location": PERSONA_LOCATION,
+                },
+                "llm_model": LLM_MODEL,
+            }
+        }
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT key, value FROM settings")
+
+    result = {}
+    for r in rows:
+        val = json.loads(r["value"]) if isinstance(r["value"], str) else r["value"]
+        result[r["key"]] = val
+
+    return {"settings": result}
+
+
+class SettingsUpdate(BaseModel):
+    key: str
+    value: dict | str | int | float | bool | list
+
+
+@app.put("/api/admin/settings")
+async def admin_update_settings(req: SettingsUpdate):
+    """Update a setting by key."""
+    pool = await get_pool()
+    if not pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    serialized = json.dumps(req.value)
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES ($1, $2::jsonb, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()
+        """, req.key, serialized)
+
+    return {"status": "success", "key": req.key}
 
 
 # ═══════════════════════════════════════════════

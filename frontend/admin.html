@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🍯 Honeypot Admin Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: rgba(20, 20, 35, 0.85);
+            --glass: rgba(255, 255, 255, 0.04);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --accent: #f59e0b;
+            --accent-glow: rgba(245, 158, 11, 0.3);
+            --danger: #ef4444;
+            --success: #22c55e;
+            --info: #3b82f6;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --radius: 16px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%; left: -50%;
+            width: 200%; height: 200%;
+            background: radial-gradient(ellipse at 20% 50%, rgba(245, 158, 11, 0.06) 0%, transparent 50%),
+                        radial-gradient(ellipse at 80% 20%, rgba(59, 130, 246, 0.04) 0%, transparent 50%);
+            animation: bgShift 20s ease-in-out infinite;
+            z-index: 0;
+        }
+
+        @keyframes bgShift { 0%, 100% { transform: translate(0, 0) } 50% { transform: translate(-3%, 2%) } }
+
+        .app {
+            position: relative;
+            z-index: 1;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* ═══ Header ═══ */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 18px 28px;
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(20px);
+            margin-bottom: 20px;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 14px; }
+
+        .header-icon {
+            width: 48px; height: 48px;
+            background: linear-gradient(135deg, var(--accent), #d97706);
+            border-radius: 14px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .header-title { font-size: 20px; font-weight: 700; }
+        .header-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+        .nav-btn {
+            padding: 10px 20px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            background: var(--glass);
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .nav-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        /* ═══ Stat Cards ═══ */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            backdrop-filter: blur(20px);
+        }
+
+        .stat-card-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .stat-card-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .stat-card-value.accent { color: var(--accent); }
+        .stat-card-value.danger { color: var(--danger); }
+        .stat-card-value.success { color: var(--success); }
+        .stat-card-value.info { color: var(--info); }
+
+        .stat-card-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* ═══ Tabs ═══ */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 14px;
+            padding: 4px;
+            margin-bottom: 20px;
+            width: fit-content;
+        }
+
+        .tab-btn {
+            padding: 10px 22px;
+            border-radius: 10px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tab-btn.active {
+            background: var(--accent);
+            color: #000;
+            font-weight: 600;
+        }
+
+        .tab-btn:hover:not(.active) {
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-primary);
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* ═══ Sessions Table ═══ */
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(20px);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .panel-title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .table-wrap { overflow-x: auto; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px 18px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--glass-border);
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 14px 18px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            white-space: nowrap;
+        }
+
+        tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge-scam { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+        .badge-safe { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+        .badge-type { background: rgba(245, 158, 11, 0.15); color: var(--accent); }
+
+        .view-btn {
+            padding: 6px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--glass-border);
+            background: var(--glass);
+            color: var(--accent);
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .view-btn:hover {
+            background: rgba(245, 158, 11, 0.1);
+            border-color: var(--accent);
+        }
+
+        .delete-btn {
+            padding: 6px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            background: transparent;
+            color: var(--danger);
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-left: 6px;
+        }
+
+        .delete-btn:hover {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: var(--danger);
+        }
+
+        /* ═══ Pagination ═══ */
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 16px;
+            border-top: 1px solid var(--glass-border);
+        }
+
+        .page-btn {
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--glass-border);
+            background: var(--glass);
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .page-btn:hover:not(:disabled) {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .page-btn.active { background: var(--accent); color: #000; font-weight: 600; border-color: var(--accent); }
+
+        .page-info { font-size: 12px; color: var(--text-muted); }
+
+        /* ═══ Session Detail Modal ═══ */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+            z-index: 100;
+            display: none;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 40px 16px;
+            overflow-y: auto;
+        }
+
+        .modal-overlay.show { display: flex; }
+
+        .modal {
+            background: rgba(20, 20, 35, 0.98);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            width: 100%;
+            max-width: 800px;
+            padding: 0;
+            box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.6);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 22px 28px;
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .modal-title { font-size: 18px; font-weight: 700; }
+        .modal-close {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--glass-border);
+            color: var(--text-muted);
+            width: 36px; height: 36px;
+            border-radius: 10px;
+            font-size: 20px;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+        }
+        .modal-close:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.12); }
+
+        .modal-body { padding: 24px 28px; max-height: 70vh; overflow-y: auto; }
+        .modal-body::-webkit-scrollbar { width: 6px; }
+        .modal-body::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
+
+        .detail-section { margin-bottom: 24px; }
+        .detail-section-title {
+            font-size: 12px; font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+        }
+
+        .detail-item label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .detail-item span {
+            font-size: 14px;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        /* Chat replay in modal */
+        .chat-replay { display: flex; flex-direction: column; gap: 10px; }
+
+        .replay-msg {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .replay-msg.scammer {
+            background: rgba(239, 68, 68, 0.10);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-bottom-left-radius: 4px;
+            margin-right: auto;
+        }
+
+        .replay-msg.agent {
+            background: rgba(34, 197, 94, 0.08);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            border-bottom-right-radius: 4px;
+            margin-left: auto;
+        }
+
+        .replay-label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .replay-msg.scammer .replay-label { color: var(--danger); }
+        .replay-msg.agent .replay-label { color: var(--success); }
+        .replay-text { color: var(--text-primary); }
+
+        /* Intel items in detail */
+        .intel-list { display: flex; flex-wrap: wrap; gap: 8px; }
+
+        .intel-chip {
+            padding: 6px 14px;
+            background: rgba(245, 158, 11, 0.08);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            border-radius: 20px;
+            font-size: 12px;
+            color: var(--accent);
+        }
+
+        .intel-chip .chip-type {
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-right: 6px;
+        }
+
+        /* ═══ Settings Panel ═══ */
+        .settings-form { max-width: 500px; }
+
+        .form-group { margin-bottom: 18px; }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-input {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .form-input:focus {
+            border-color: var(--accent);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .save-btn {
+            padding: 12px 28px;
+            border-radius: 12px;
+            border: none;
+            background: linear-gradient(135deg, var(--accent), #d97706);
+            color: #000;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .save-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 25px rgba(245, 158, 11, 0.3); }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px; right: 24px;
+            padding: 14px 22px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 500;
+            z-index: 200;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+        }
+
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast.success { background: rgba(34, 197, 94, 0.9); color: #000; }
+        .toast.error { background: rgba(239, 68, 68, 0.9); color: #fff; }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state .empty-icon { font-size: 48px; margin-bottom: 16px; }
+        .empty-state .empty-text { font-size: 14px; }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .modal { max-width: 100%; }
+            td, th { padding: 10px 12px; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-left">
+                <div class="header-icon">📊</div>
+                <div>
+                    <div class="header-title">Admin Dashboard</div>
+                    <div class="header-sub">Honeypot Session Management</div>
+                </div>
+            </div>
+            <a href="/" class="nav-btn">💬 Back to Chat</a>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-card-label">Total Sessions</div>
+                <div class="stat-card-value accent" id="statTotal">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-label">Scams Detected</div>
+                <div class="stat-card-value danger" id="statScams">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-label">Avg Confidence</div>
+                <div class="stat-card-value info" id="statConf">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-label">Total Messages</div>
+                <div class="stat-card-value success" id="statMsgs">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-label">Intel Extracted</div>
+                <div class="stat-card-value accent" id="statIntel">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-label">Live Sessions</div>
+                <div class="stat-card-value info" id="statLive">—</div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button type="button" class="tab-btn active" onclick="switchTab('sessions')">📋 Sessions</button>
+            <button type="button" class="tab-btn" onclick="switchTab('settings')">⚙️ Settings</button>
+        </div>
+
+        <!-- Sessions Tab -->
+        <div class="tab-content active" id="tab-sessions">
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">Saved Sessions</div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select class="form-input" id="filterType" onchange="loadSessions(1)" style="width:160px; padding:8px 12px; font-size:12px;">
+                            <option value="">All Types</option>
+                            <option value="bank_fraud">Bank Fraud</option>
+                            <option value="upi_fraud">UPI Fraud</option>
+                            <option value="kyc_scam">KYC Scam</option>
+                            <option value="otp_fraud">OTP Fraud</option>
+                            <option value="lottery_scam">Lottery Scam</option>
+                            <option value="job_scam">Job Scam</option>
+                            <option value="threat_scam">Threat Scam</option>
+                            <option value="investment_scam">Investment</option>
+                            <option value="tech_support">Tech Support</option>
+                            <option value="generic">Generic</option>
+                        </select>
+                        <button type="button" class="nav-btn" onclick="loadSessions(1)" style="padding:8px 14px;">🔄 Refresh</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th scope="col">Session ID</th>
+                                <th scope="col">Persona</th>
+                                <th scope="col">Scam Type</th>
+                                <th scope="col">Confidence</th>
+                                <th scope="col">Messages</th>
+                                <th scope="col">Date</th>
+                                <th scope="col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sessionsBody">
+                            <tr><td colspan="7" class="loading">Loading sessions...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pagination" id="pagination"></div>
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div class="tab-content" id="tab-settings">
+            <div class="panel" style="padding: 28px;">
+                <div class="panel-title" style="margin-bottom: 24px;">Application Settings</div>
+                <div class="settings-form">
+                    <div class="form-group">
+                        <label class="form-label">Default Persona Name</label>
+                        <input class="form-input" id="sPersonaName" type="text" placeholder="Tejash S">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Default Age</label>
+                        <input class="form-input" id="sPersonaAge" type="text" placeholder="28">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Default Occupation</label>
+                        <input class="form-input" id="sPersonaOccupation" type="text" placeholder="Software Engineer">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Default Location</label>
+                        <input class="form-input" id="sPersonaLocation" type="text" placeholder="Perundurai">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">LLM Model</label>
+                        <input class="form-input" id="sLlmModel" type="text" placeholder="llama-3.3-70b-versatile">
+                    </div>
+                    <button type="button" class="save-btn" onclick="saveSettings()">💾 Save Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Session Detail Modal -->
+    <div class="modal-overlay" id="sessionModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title" id="modalTitle">Session Detail</div>
+                <button type="button" class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <div class="loading">Loading session data...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let currentPage = 1;
+
+        // ═══════════════════════════════
+        // Stats
+        // ═══════════════════════════════
+        async function loadStats() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/admin/stats`);
+                const data = await resp.json();
+
+                document.getElementById('statTotal').textContent = data.total_sessions ?? 0;
+                document.getElementById('statScams').textContent = data.scam_detected ?? 0;
+                document.getElementById('statConf').textContent = ((data.average_confidence ?? 0) * 100).toFixed(1) + '%';
+                document.getElementById('statMsgs').textContent = data.total_messages ?? 0;
+                document.getElementById('statIntel').textContent = data.total_intelligence ?? 0;
+                document.getElementById('statLive').textContent = data.live_sessions ?? 0;
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+
+        // ═══════════════════════════════
+        // Sessions
+        // ═══════════════════════════════
+        async function loadSessions(page = 1) {
+            currentPage = page;
+            const tbody = document.getElementById('sessionsBody');
+            tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading...</td></tr>';
+
+            try {
+                const filterType = document.getElementById('filterType').value;
+                let url = `${API_BASE}/api/admin/sessions?page=${page}&limit=15`;
+                if (filterType) url += `&scam_type=${filterType}`;
+
+                const resp = await fetch(url);
+                const data = await resp.json();
+
+                if (!data.sessions || data.sessions.length === 0) {
+                    tbody.innerHTML = `
+                        <tr><td colspan="7">
+                            <div class="empty-state">
+                                <div class="empty-icon">📭</div>
+                                <div class="empty-text">No sessions found.<br>End a chat session to save it here.</div>
+                            </div>
+                        </td></tr>`;
+                    document.getElementById('pagination').innerHTML = '';
+                    return;
+                }
+
+                tbody.innerHTML = data.sessions.map(s => {
+                    const pName = s.persona?.name || 'Unknown';
+                    const conf = (s.scam_confidence * 100).toFixed(0);
+                    const confClass = s.scam_confidence >= 0.3 ? 'badge-scam' : 'badge-safe';
+                    const date = s.started_at ? new Date(s.started_at).toLocaleDateString('en-IN', {
+                        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                    }) : '—';
+                    const shortId = s.id.length > 20 ? s.id.slice(0, 20) + '…' : s.id;
+
+                    return `<tr>
+                        <td title="${escapeAttr(s.id)}" style="font-family: monospace; font-size: 12px;">${escapeHtml(shortId)}</td>
+                        <td>${escapeHtml(pName)}</td>
+                        <td><span class="badge badge-type">${escapeHtml(s.scam_type)}</span></td>
+                        <td><span class="badge ${confClass}">${conf}%</span></td>
+                        <td>${s.turn_count * 2}</td>
+                        <td style="font-size: 12px;">${date}</td>
+                        <td>
+                            <button class="view-btn" onclick="viewSession('${escapeAttr(s.id)}')">👁️ View</button>
+                            <button class="delete-btn" onclick="deleteSession('${escapeAttr(s.id)}')">🗑️</button>
+                        </td>
+                    </tr>`;
+                }).join('');
+
+                // Pagination
+                renderPagination(data.page, data.total_pages, data.total);
+            } catch (e) {
+                console.error('Failed to load sessions:', e);
+                tbody.innerHTML = '<tr><td colspan="7" class="loading">⚠️ Failed to load sessions. Is the database connected?</td></tr>';
+            }
+        }
+
+        function renderPagination(page, totalPages, total) {
+            const container = document.getElementById('pagination');
+            if (totalPages <= 1) { container.innerHTML = ''; return; }
+
+            let html = `<button class="page-btn" onclick="loadSessions(${page - 1})" ${page <= 1 ? 'disabled' : ''}>← Prev</button>`;
+
+            const start = Math.max(1, page - 2);
+            const end = Math.min(totalPages, page + 2);
+
+            for (let i = start; i <= end; i++) {
+                html += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="loadSessions(${i})">${i}</button>`;
+            }
+
+            html += `<button class="page-btn" onclick="loadSessions(${page + 1})" ${page >= totalPages ? 'disabled' : ''}>Next →</button>`;
+            html += `<span class="page-info">${total} total</span>`;
+            container.innerHTML = html;
+        }
+
+        // ═══════════════════════════════
+        // Session Detail
+        // ═══════════════════════════════
+        async function viewSession(sessionId) {
+            const modal = document.getElementById('sessionModal');
+            const body = document.getElementById('modalBody');
+            modal.classList.add('show');
+            body.innerHTML = '<div class="loading">Loading session data...</div>';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/admin/sessions/${sessionId}`);
+                if (!resp.ok) throw new Error('Session not found');
+                const s = await resp.json();
+
+                const pName = s.persona?.name || 'Unknown';
+                const pOccupation = s.persona?.occupation || '—';
+                const pLocation = s.persona?.location || '—';
+                const pBank = s.persona?.bank || '—';
+
+                document.getElementById('modalTitle').textContent = `Session: ${sessionId.slice(0, 24)}…`;
+
+                let html = `
+                    <div class="detail-section">
+                        <div class="detail-section-title">📋 Session Info</div>
+                        <div class="detail-grid">
+                            <div class="detail-item"><label>Persona</label><span>${escapeHtml(pName)}</span></div>
+                            <div class="detail-item"><label>Occupation</label><span>${escapeHtml(pOccupation)}</span></div>
+                            <div class="detail-item"><label>Location</label><span>${escapeHtml(pLocation)}</span></div>
+                            <div class="detail-item"><label>Bank</label><span>${escapeHtml(pBank)}</span></div>
+                            <div class="detail-item"><label>Scam Type</label><span class="badge badge-type">${escapeHtml(s.scam_type)}</span></div>
+                            <div class="detail-item"><label>Confidence</label><span>${(s.scam_confidence * 100).toFixed(1)}%</span></div>
+                            <div class="detail-item"><label>Turn Count</label><span>${s.turn_count}</span></div>
+                            <div class="detail-item"><label>Started</label><span style="font-size:12px;">${s.started_at ? new Date(s.started_at).toLocaleString() : '—'}</span></div>
+                        </div>
+                    </div>
+                `;
+
+                // Intelligence
+                if (s.intelligence && s.intelligence.length > 0) {
+                    html += `<div class="detail-section">
+                        <div class="detail-section-title">🔍 Extracted Intelligence (${s.intelligence.length})</div>
+                        <div class="intel-list">
+                            ${s.intelligence.map(i => `<div class="intel-chip"><span class="chip-type">${escapeHtml(i.type)}</span>${escapeHtml(i.value)}</div>`).join('')}
+                        </div>
+                    </div>`;
+                }
+
+                // Messages
+                if (s.messages && s.messages.length > 0) {
+                    html += `<div class="detail-section">
+                        <div class="detail-section-title">💬 Conversation (${s.messages.length} messages)</div>
+                        <div class="chat-replay">
+                            ${s.messages.map(m => `
+                                <div class="replay-msg ${m.sender === 'agent' ? 'agent' : 'scammer'}">
+                                    <div class="replay-label">${m.sender === 'agent' ? '🟢 ' + escapeHtml(pName) : '🔴 Scammer'}</div>
+                                    <div class="replay-text">${escapeHtml(m.text)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>`;
+                }
+
+                body.innerHTML = html;
+            } catch (e) {
+                body.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-text">Failed to load session: ${escapeHtml(e.message)}</div></div>`;
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('sessionModal').classList.remove('show');
+        }
+
+        async function deleteSession(sessionId) {
+            if (!confirm(`Delete session ${sessionId.slice(0, 20)}…? This cannot be undone.`)) return;
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/admin/sessions/${sessionId}`, { method: 'DELETE' });
+                if (resp.ok) {
+                    showToast('Session deleted', 'success');
+                    loadSessions(currentPage);
+                    loadStats();
+                } else {
+                    showToast('Failed to delete session', 'error');
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+        }
+
+        // ═══════════════════════════════
+        // Settings
+        // ═══════════════════════════════
+        async function loadSettings() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/admin/settings`);
+                const data = await resp.json();
+                const s = data.settings || {};
+
+                if (s.persona) {
+                    document.getElementById('sPersonaName').value = s.persona.name || '';
+                    document.getElementById('sPersonaAge').value = s.persona.age || '';
+                    document.getElementById('sPersonaOccupation').value = s.persona.occupation || '';
+                    document.getElementById('sPersonaLocation').value = s.persona.location || '';
+                }
+                if (s.llm_model) {
+                    document.getElementById('sLlmModel').value = typeof s.llm_model === 'string' ? s.llm_model : (s.llm_model.value || '');
+                }
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+            }
+        }
+
+        async function saveSettings() {
+            try {
+                const persona = {
+                    name: document.getElementById('sPersonaName').value,
+                    age: document.getElementById('sPersonaAge').value,
+                    occupation: document.getElementById('sPersonaOccupation').value,
+                    location: document.getElementById('sPersonaLocation').value,
+                };
+                const llmModel = document.getElementById('sLlmModel').value;
+
+                await fetch(`${API_BASE}/api/admin/settings`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: 'persona', value: persona }),
+                });
+                await fetch(`${API_BASE}/api/admin/settings`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: 'llm_model', value: llmModel }),
+                });
+
+                showToast('Settings saved!', 'success');
+            } catch (e) {
+                showToast('Failed to save: ' + e.message, 'error');
+            }
+        }
+
+        // ═══════════════════════════════
+        // Tabs
+        // ═══════════════════════════════
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById(`tab-${tab}`).classList.add('active');
+
+            if (tab === 'settings') loadSettings();
+        }
+
+        // ═══════════════════════════════
+        // Utilities
+        // ═══════════════════════════════
+        function escapeHtml(text) {
+            if (!text) return '';
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+
+        function escapeAttr(text) {
+            return (text || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        }
+
+        function showToast(msg, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = `toast ${type} show`;
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // ═══════════════════════════════
+        // Init
+        // ═══════════════════════════════
+        loadStats();
+        loadSessions(1);
+    </script>
+</body>
+
+</html>

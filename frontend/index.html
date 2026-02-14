@@ -904,11 +904,13 @@
                     <div class="header-sub">AI Scam Intelligence System</div>
                 </div>
             </div>
-            <div style="display:flex; align-items:center;">
+            <div style="display:flex; align-items:center; gap:6px;">
                 <div class="mode-toggle">
                     <button type="button" class="mode-btn active" id="msgModeBtn" onclick="switchMode('message')">💬 Message</button>
                     <button type="button" class="mode-btn" id="voiceModeBtn" onclick="switchMode('voice')">🎙️ Voice</button>
                 </div>
+                <button type="button" class="header-btn" id="endSessionBtn" onclick="endSession()" title="End Session &amp; Save to DB" style="color: var(--danger); font-size: 15px;">⏹</button>
+                <a href="/admin" class="header-btn" title="Admin Dashboard" style="text-decoration:none; font-size: 15px;">📊</a>
                 <button type="button" class="header-btn" onclick="openSettings()" title="Configure Persona">⚙️</button>
             </div>
         </div>
@@ -1271,6 +1273,99 @@
                 jsonContent.textContent = JSON.stringify(jsonData, null, 2);
                 jsonPanel.classList.add('show');
             }
+        }
+
+        // ═══════════════════════════════════════════════
+        // End Session — Save to Database
+        // ═══════════════════════════════════════════════
+        async function endSession() {
+            if (conversationHistory.length === 0) {
+                showToast('No conversation to save.', 'warn');
+                return;
+            }
+
+            if (!confirm('End this session and save all data to the database?')) return;
+
+            const btn = document.getElementById('endSessionBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/session/end`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId, persona }),
+                });
+
+                const data = await resp.json();
+
+                if (resp.ok && data.status === 'success') {
+                    showToast('✅ Session saved! ' + data.summary.message_count + ' messages stored.', 'success');
+
+                    // Reset for new session
+                    sessionId = 'session-' + Date.now();
+                    conversationHistory = [];
+                    messageCount = 0;
+
+                    const firstName = persona.name.split(' ')[0];
+                    document.getElementById('chatContainer').innerHTML = `
+                        <div class="empty-state" id="emptyState">
+                            <div class="empty-icon">🕵️</div>
+                            <div class="empty-text">
+                                Session saved! Start a new conversation.<br>
+                                The AI honeypot (<span id="agentNameDisplay">${firstName}</span>) is ready.
+                            </div>
+                            <div class="empty-hint">Try: "Your ${persona.bank} account has been compromised"</div>
+                        </div>
+                        <div class="typing-indicator" id="typingIndicator">
+                            <div class="msg-label" style="color: var(--success);"><span id="typingName">${firstName}</span> is typing...</div>
+                            <div class="typing-dots"><span></span><span></span><span></span></div>
+                        </div>
+                    `;
+
+                    // Reset stats display
+                    document.getElementById('msgCount').textContent = '0';
+                    document.getElementById('scamStatus').textContent = '—';
+                    document.getElementById('scamStatus').style.color = '';
+                    document.getElementById('confVal').textContent = '—';
+                    document.getElementById('confVal').style.color = '';
+                    document.getElementById('scamType').textContent = '—';
+                    document.getElementById('scamType').style.color = '';
+
+                    // Reset intel panels
+                    document.getElementById('intelPanel').classList.remove('show');
+                    document.getElementById('intelGrid').innerHTML = '';
+                    document.getElementById('jsonIntelPanel').classList.remove('show');
+                    document.getElementById('jsonIntelContent').textContent = 'No data yet...';
+                } else {
+                    showToast('⚠️ ' + (data.detail || 'Failed to save session'), 'error');
+                }
+            } catch (e) {
+                console.error('End session error:', e);
+                showToast('⚠️ Connection error. Is the server running?', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '⏹';
+            }
+        }
+
+        function showToast(msg, type = 'success') {
+            // Create a quick toast notification
+            let toast = document.getElementById('toastNotif');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'toastNotif';
+                toast.style.cssText = 'position:fixed;bottom:24px;right:24px;padding:14px 22px;border-radius:12px;font-size:13px;font-weight:500;z-index:200;transform:translateY(100px);opacity:0;transition:all 0.3s;font-family:Inter,sans-serif;';
+                document.body.appendChild(toast);
+            }
+            toast.textContent = msg;
+            toast.style.background = type === 'error' ? 'rgba(239,68,68,0.9)' :
+                                     type === 'warn' ? 'rgba(245,158,11,0.9)' :
+                                     'rgba(34,197,94,0.9)';
+            toast.style.color = type === 'error' ? '#fff' : '#000';
+            toast.style.transform = 'translateY(0)';
+            toast.style.opacity = '1';
+            setTimeout(() => { toast.style.transform = 'translateY(100px)'; toast.style.opacity = '0'; }, 3500);
         }
 
         // ═══════════════════════════════════════════════
