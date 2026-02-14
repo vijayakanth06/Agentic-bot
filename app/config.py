@@ -44,10 +44,12 @@ class Settings:
     )
 
     # --- Persona ---
-    PERSONA_NAME: str = os.getenv("PERSONA_NAME", "Priya Sharma")
+    PERSONA_NAME: str = os.getenv("PERSONA_NAME", "Tejash S")
     PERSONA_AGE: int = int(os.getenv("PERSONA_AGE", "28"))
-    PERSONA_LOCATION: str = os.getenv("PERSONA_LOCATION", "Mumbai, Andheri West")
-    PERSONA_OCCUPATION: str = os.getenv("PERSONA_OCCUPATION", "Software Engineer at TCS")
+    PERSONA_LOCATION: str = os.getenv("PERSONA_LOCATION", "perundurai")
+    PERSONA_OCCUPATION: str = os.getenv("PERSONA_OCCUPATION", "Software Engineer at grootan")
+    PERSONA_GENDER: str = os.getenv("PERSONA_GENDER", "Male")
+    PERSONA_LANGUAGE: str = os.getenv("PERSONA_LANGUAGE", "English")
 
 
 settings = Settings()

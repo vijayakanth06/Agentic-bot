@@ -1,708 +1,1512 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🍯 Agentic Honeypot — Live Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <title>🍯 Agentic Honeypot</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-primary: #0a0e17;
-            --bg-secondary: #111827;
-            --bg-card: #1a2332;
-            --bg-card-hover: #1f2b3d;
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: rgba(20, 20, 35, 0.85);
+            --glass: rgba(255, 255, 255, 0.04);
+            --glass-border: rgba(255, 255, 255, 0.08);
             --accent: #f59e0b;
-            --accent-glow: rgba(245, 158, 11, 0.2);
+            --accent-glow: rgba(245, 158, 11, 0.3);
             --danger: #ef4444;
-            --success: #10b981;
-            --info: #3b82f6;
+            --success: #22c55e;
             --text-primary: #f1f5f9;
             --text-secondary: #94a3b8;
             --text-muted: #64748b;
-            --border: #1e293b;
-            --border-active: #334155;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            min-height: 100vh;
+            --scammer-bg: rgba(239, 68, 68, 0.12);
+            --scammer-border: rgba(239, 68, 68, 0.25);
+            --agent-bg: rgba(34, 197, 94, 0.10);
+            --agent-border: rgba(34, 197, 94, 0.25);
+            --radius: 16px;
         }
 
-        /* === Header === */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ═══ Animated background ═══ */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(ellipse at 20% 50%, rgba(245, 158, 11, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(239, 68, 68, 0.04) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 80%, rgba(34, 197, 94, 0.04) 0%, transparent 50%);
+            animation: bgShift 20s ease-in-out infinite;
+            z-index: 0;
+        }
+
+        @keyframes bgShift {
+
+            0%,
+            100% {
+                transform: translate(0, 0)
+            }
+
+            50% {
+                transform: translate(-3%, 2%)
+            }
+        }
+
+        .app {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+
+        /* ═══ Header ═══ */
         .header {
-            background: linear-gradient(135deg, var(--bg-secondary) 0%, #1a1a2e 100%);
-            border-bottom: 1px solid var(--border);
-            padding: 16px 24px;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            padding: 16px 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(20px);
+            margin-bottom: 12px;
         }
-        .header h1 {
-            font-size: 20px;
-            font-weight: 700;
+
+        .header-left {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 14px;
         }
-        .header h1 .emoji { font-size: 28px; }
-        .header .badge {
+
+        .header-icon {
+            width: 44px;
+            height: 44px;
+            background: linear-gradient(135deg, var(--accent), #d97706);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .header-title {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .header-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        /* ═══ Mode Toggle ═══ */
+        .mode-toggle {
+            display: flex;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .mode-btn {
+            padding: 10px 20px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .mode-btn.active {
             background: var(--accent);
             color: #000;
-            padding: 3px 10px;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.5px;
+            font-weight: 600;
         }
+
+        .mode-btn:hover:not(.active) {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        /* ═══ Status Bar ═══ */
         .status-bar {
             display: flex;
-            gap: 16px;
             align-items: center;
+            gap: 16px;
+            padding: 10px 20px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            margin-bottom: 12px;
+            font-size: 12px;
+            color: var(--text-muted);
         }
+
         .status-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            display: inline-block;
-            margin-right: 6px;
-        }
-        .status-dot.online { background: var(--success); box-shadow: 0 0 8px var(--success); }
-        .status-dot.offline { background: var(--danger); }
-
-        /* === Stats Grid === */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            padding: 20px 24px;
-        }
-        .stat-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
-            transition: all 0.3s ease;
-        }
-        .stat-card:hover {
-            border-color: var(--accent);
-            box-shadow: 0 0 20px var(--accent-glow);
-            transform: translateY(-2px);
-        }
-        .stat-card .label {
-            font-size: 12px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 8px;
-        }
-        .stat-card .value {
-            font-size: 32px;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--accent), #fbbf24);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .stat-card .sub {
-            font-size: 11px;
-            color: var(--text-secondary);
-            margin-top: 4px;
+            background: var(--success);
+            box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+            animation: pulse 2s infinite;
         }
 
-        /* === Main Layout === */
-        .main-grid {
-            display: grid;
-            grid-template-columns: 1fr 400px;
-            gap: 20px;
-            padding: 0 24px 24px;
-            max-height: calc(100vh - 220px);
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: 0.4
+            }
         }
 
-        /* === Session List === */
-        .sessions-panel {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            overflow: hidden;
+        .stat {
             display: flex;
-            flex-direction: column;
+            align-items: center;
+            gap: 4px;
         }
-        .panel-header {
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--border);
+
+        .stat-val {
+            color: var(--text-primary);
             font-weight: 600;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
         }
-        .sessions-list {
-            overflow-y: auto;
-            flex: 1;
-            max-height: 500px;
-        }
-        .session-item {
-            padding: 14px 20px;
-            border-bottom: 1px solid var(--border);
-            cursor: pointer;
-            transition: background 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .session-item:hover { background: var(--bg-card-hover); }
-        .session-item.active { background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--accent); }
-        .session-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px;
-            flex-shrink: 0;
-        }
-        .session-icon.scam { background: rgba(239, 68, 68, 0.2); }
-        .session-icon.safe { background: rgba(16, 185, 129, 0.2); }
-        .session-icon.voice { background: rgba(139, 92, 246, 0.2); }
-        .session-info { flex: 1; }
-        .session-info .name { font-weight: 500; font-size: 14px; }
-        .session-info .meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
-        .session-confidence {
-            font-size: 12px;
-            font-weight: 700;
-            padding: 3px 8px;
-            border-radius: 6px;
-        }
-        .confidence-high { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
-        .confidence-med { background: rgba(245, 158, 11, 0.2); color: var(--accent); }
-        .confidence-low { background: rgba(16, 185, 129, 0.2); color: var(--success); }
 
-        /* === Detail Panel === */
-        .detail-panel {
+        /* ═══ Chat Area ═══ */
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
             background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-        .detail-header {
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--border);
-        }
-        .detail-header h3 { font-size: 14px; font-weight: 600; }
-        .detail-body {
-            padding: 16px 20px;
-            overflow-y: auto;
-            flex: 1;
-            max-height: 500px;
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(20px);
+            margin-bottom: 12px;
+            scroll-behavior: smooth;
         }
 
-        /* === Chat Messages === */
-        .chat-messages { display: flex; flex-direction: column; gap: 10px; }
-        .chat-msg {
-            padding: 10px 14px;
-            border-radius: 12px;
-            max-width: 85%;
-            font-size: 13px;
-            line-height: 1.5;
-            animation: fadeIn 0.3s ease;
+        .chat-container::-webkit-scrollbar {
+            width: 6px;
         }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-        .chat-msg.scammer {
-            background: rgba(239, 68, 68, 0.15);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            align-self: flex-start;
+
+        .chat-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .chat-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+
+        .msg {
+            max-width: 80%;
+            padding: 14px 18px;
+            border-radius: 18px;
+            margin-bottom: 10px;
+            font-size: 14px;
+            line-height: 1.6;
+            animation: msgIn 0.3s ease-out;
+            position: relative;
+        }
+
+        @keyframes msgIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .msg.scammer {
+            background: var(--scammer-bg);
+            border: 1px solid var(--scammer-border);
             border-bottom-left-radius: 4px;
+            margin-right: auto;
         }
-        .chat-msg.agent {
-            background: rgba(59, 130, 246, 0.15);
-            border: 1px solid rgba(59, 130, 246, 0.3);
-            align-self: flex-end;
+
+        .msg.agent {
+            background: var(--agent-bg);
+            border: 1px solid var(--agent-border);
             border-bottom-right-radius: 4px;
+            margin-left: auto;
         }
-        .chat-msg .sender {
-            font-size: 10px;
+
+        .msg-label {
+            font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            margin-bottom: 4px;
+            margin-bottom: 6px;
         }
-        .chat-msg.scammer .sender { color: var(--danger); }
-        .chat-msg.agent .sender { color: var(--info); }
 
-        /* === Intel Items === */
-        .intel-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-        .intel-item {
+        .msg.scammer .msg-label {
+            color: var(--danger);
+        }
+
+        .msg.agent .msg-label {
+            color: var(--success);
+        }
+
+        .msg-text {
+            color: var(--text-primary);
+        }
+
+        .msg-meta {
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 8px;
+            display: flex;
+            gap: 12px;
+        }
+
+        .typing-indicator {
+            display: none;
+            max-width: 80%;
+            margin-left: auto;
+            padding: 14px 18px;
+            background: var(--agent-bg);
+            border: 1px solid var(--agent-border);
+            border-radius: 18px;
+            border-bottom-right-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        .typing-indicator.show {
+            display: block;
+        }
+
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+        }
+
+        .typing-dots span {
+            width: 7px;
+            height: 7px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: typeBounce 1.4s infinite;
+        }
+
+        .typing-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typeBounce {
+
+            0%,
+            60%,
+            100% {
+                transform: translateY(0)
+            }
+
+            30% {
+                transform: translateY(-6px)
+            }
+        }
+
+        /* ═══ Input Area ═══ */
+        .input-area {
+            display: flex;
+            gap: 10px;
+            padding: 14px 18px;
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(20px);
+        }
+
+        .input-area input {
+            flex: 1;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 14px 18px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+            transition: border 0.3s;
+        }
+
+        .input-area input:focus {
+            border-color: var(--accent);
+        }
+
+        .input-area input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .send-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 14px;
+            border: none;
+            background: linear-gradient(135deg, var(--accent), #d97706);
+            color: #000;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 10px 14px;
-            background: rgba(245, 158, 11, 0.08);
-            border: 1px solid rgba(245, 158, 11, 0.2);
-            border-radius: 8px;
-            font-size: 13px;
-        }
-        .intel-type {
-            background: var(--accent);
-            color: #000;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
+            justify-content: center;
             flex-shrink: 0;
         }
-        .intel-value { font-family: 'Courier New', monospace; font-weight: 500; word-break: break-all; }
 
-        /* === Controls === */
-        .controls {
-            padding: 12px 20px;
-            border-top: 1px solid var(--border);
-            display: flex;
-            gap: 8px;
+        .send-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px var(--accent-glow);
         }
-        .btn {
-            padding: 8px 16px;
-            border-radius: 8px;
-            border: none;
-            font-size: 12px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-family: 'Inter', sans-serif;
-        }
-        .btn:hover { transform: translateY(-1px); }
-        .btn-primary { background: var(--accent); color: #000; }
-        .btn-primary:hover { box-shadow: 0 4px 12px var(--accent-glow); }
-        .btn-danger { background: var(--danger); color: #fff; }
-        .btn-success { background: var(--success); color: #fff; }
-        .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
-        .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
 
-        /* === Test Input === */
-        .test-panel {
-            padding: 20px 24px;
-            background: var(--bg-secondary);
-            border-top: 1px solid var(--border);
+        .send-btn:active {
+            transform: scale(0.95);
         }
-        .test-input-group {
-            display: flex;
-            gap: 10px;
-        }
-        .test-input {
-            flex: 1;
-            padding: 10px 16px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-primary);
-            font-family: 'Inter', sans-serif;
-            font-size: 13px;
-        }
-        .test-input:focus { outline: none; border-color: var(--accent); }
-        .test-input::placeholder { color: var(--text-muted); }
 
-        /* === Live Feed === */
-        .live-feed {
-            max-height: 120px;
-            overflow-y: auto;
-            padding: 8px 0;
+        .send-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
         }
-        .feed-item {
-            font-size: 11px;
-            padding: 4px 12px;
-            color: var(--text-muted);
-            display: flex;
-            gap: 8px;
+
+        /* ═══ Voice Mode ═══ */
+        .voice-area {
+            display: none;
+            flex-direction: column;
             align-items: center;
+            justify-content: center;
+            gap: 24px;
+            padding: 40px 18px;
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(20px);
         }
-        .feed-item .time { color: var(--text-muted); font-family: monospace; }
-        .feed-item.scam { color: var(--danger); }
-        .feed-item.handoff { color: var(--accent); }
-        .feed-item.voice { color: #8b5cf6; }
 
-        /* === Tabs === */
-        .tabs {
+        .voice-area.show {
             display: flex;
-            border-bottom: 1px solid var(--border);
         }
-        .tab {
-            padding: 10px 20px;
+
+        .mic-btn {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            border: 3px solid var(--glass-border);
+            background: var(--glass);
+            color: var(--text-primary);
+            font-size: 36px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .mic-btn:hover {
+            border-color: var(--accent);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .mic-btn.recording {
+            border-color: var(--danger);
+            background: rgba(239, 68, 68, 0.15);
+            animation: micPulse 1.5s infinite;
+        }
+
+        @keyframes micPulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3);
+            }
+
+            50% {
+                box-shadow: 0 0 0 20px rgba(239, 68, 68, 0);
+            }
+        }
+
+        .mic-btn.speaking {
+            border-color: var(--success);
+            background: rgba(34, 197, 94, 0.15);
+            animation: micPulse2 1s infinite;
+        }
+
+        @keyframes micPulse2 {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.3);
+            }
+
+            50% {
+                box-shadow: 0 0 0 15px rgba(34, 197, 94, 0);
+            }
+        }
+
+        .voice-status {
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        .voice-transcript {
+            width: 100%;
+            max-width: 600px;
+            min-height: 60px;
+            padding: 16px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            font-size: 14px;
+            color: var(--text-primary);
+            text-align: center;
+            line-height: 1.6;
+        }
+
+        /* ═══ Intel Panel ═══ */
+        .intel-panel {
+            display: none;
+            padding: 14px 18px;
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(20px);
+            margin-bottom: 12px;
+        }
+
+        .intel-panel.show {
+            display: block;
+        }
+
+        .intel-title {
             font-size: 12px;
             font-weight: 600;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+            margin-bottom: 10px;
+        }
+
+        .intel-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .intel-tag {
+            padding: 4px 10px;
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            border-radius: 20px;
+            font-size: 11px;
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        /* ═══ Empty State ═══ */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            gap: 16px;
             color: var(--text-muted);
+        }
+
+        .empty-icon {
+            font-size: 48px;
+            opacity: 0.5;
+        }
+
+        .empty-text {
+            font-size: 14px;
+            text-align: center;
+            line-height: 1.6;
+        }
+
+        .empty-hint {
+            font-size: 12px;
+            color: var(--text-muted);
+            opacity: 0.6;
+        }
+
+        /* ═══ Modal ═══ */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(8px);
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+            opacity: 1;
+        }
+
+        .modal {
+            background: rgba(20, 20, 35, 0.95);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            width: 100%;
+            max-width: 420px;
+            padding: 28px;
+            box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.6);
+            transform: scale(0.9) translateY(10px);
+            transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+        }
+
+        .modal-overlay.show .modal {
+            transform: scale(1) translateY(0);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .modal-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .modal-close {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--glass-border);
+            color: var(--text-muted);
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             transition: all 0.2s;
         }
-        .tab:hover { color: var(--text-primary); }
-        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
 
-        /* === Responsive === */
-        @media (max-width: 900px) {
-            .main-grid { grid-template-columns: 1fr; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        .modal-close:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        .modal-sub {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 22px;
+            line-height: 1.5;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-input {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .form-input:focus {
+            border-color: var(--accent);
+            background: rgba(255, 255, 255, 0.06);
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
+        }
+
+        .form-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        /* ═══ Select / Dropdown Styling ═══ */
+        select.form-input {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            background-size: 12px;
+            padding-right: 36px;
+            cursor: pointer;
+        }
+
+        select.form-input option {
+            background: #1a1a2e;
+            color: var(--text-primary);
+            padding: 10px 14px;
+            font-size: 14px;
+        }
+
+        select.form-input option:hover,
+        select.form-input option:checked {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--accent);
+        }
+
+        /* ═══ JSON Intel Panel ═══ */
+        .json-intel-panel {
+            display: none;
+            padding: 14px 18px;
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(20px);
+            margin-bottom: 12px;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+
+        .json-intel-panel.show {
+            display: block;
+        }
+
+        .json-intel-panel::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .json-intel-panel::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .json-intel-panel::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+
+        .json-intel-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #60a5fa;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .json-intel-content {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #a5f3fc;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .btn-primary {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--accent), #d97706);
+            color: #000;
+            font-weight: 700;
+            font-size: 15px;
+            cursor: pointer;
+            margin-top: 12px;
+            transition: all 0.2s;
+            letter-spacing: 0.3px;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 25px rgba(245, 158, 11, 0.3);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .header-btn {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            color: var(--text-secondary);
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 18px;
+            margin-left: 10px;
+            transition: all 0.2s;
+        }
+
+        .header-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        /* ═══ Responsive ═══ */
+        @media (max-width: 640px) {
+            .app {
+                padding: 8px;
+            }
+
+            .header {
+                padding: 12px 14px;
+            }
+
+            .msg {
+                max-width: 90%;
+            }
+
+            .modal {
+                max-width: 100%;
+                padding: 20px;
+            }
         }
     </style>
 </head>
+
 <body>
-    <!-- Header -->
-    <div class="header">
-        <h1>
-            <span class="emoji">🍯</span>
-            Agentic Honeypot
-            <span class="badge">LIVE</span>
-        </h1>
+    <!-- Persona Modal -->
+    <div class="modal-overlay" id="personaModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">🎭 Configure Persona</div>
+                <button type="button" class="modal-close" onclick="closeSettings()">&times;</button>
+            </div>
+            <div class="modal-sub">Define the profile the AI will act as.</div>
+
+            <div class="form-group">
+                <label class="form-label">Name</label>
+                <input type="text" class="form-input" id="pName" placeholder="e.g. Tejash S">
+            </div>
+            <div class="form-group" style="display:flex; gap:12px;">
+                <div style="flex:1">
+                    <label class="form-label">Age</label>
+                    <input type="text" class="form-input" id="pAge" placeholder="28">
+                </div>
+                <div style="flex:1">
+                    <label class="form-label">Bank</label>
+                    <input type="text" class="form-input" id="pBank" placeholder="SBI">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Occupation</label>
+                <input type="text" class="form-input" id="pJob" placeholder="Software Engineer">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Location</label>
+                <input type="text" class="form-input" id="pLoc" placeholder="e.g. Perundurai">
+            </div>
+            <div class="form-group" style="display:flex; gap:12px;">
+                <div style="flex:1">
+                    <label class="form-label">Gender</label>
+                    <select class="form-input" id="pGender">
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                    </select>
+                </div>
+                <div style="flex:1">
+                    <label class="form-label">Language</label>
+                    <select class="form-input" id="pLang">
+                        <option value="English">English</option>
+                        <option value="Tamil">Tamil</option>
+                        <option value="Hindi">Hindi</option>
+                        <option value="Telugu">Telugu</option>
+                        <option value="Kannada">Kannada</option>
+                        <option value="Malayalam">Malayalam</option>
+                    </select>
+                </div>
+            </div>
+
+            <button type="button" class="btn-primary" onclick="savePersona()">Save &amp; Start</button>
+        </div>
+    </div>
+
+    <div class="app">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-left">
+                <div class="header-icon">🍯</div>
+                <div>
+                    <div class="header-title">Agentic Honeypot</div>
+                    <div class="header-sub">AI Scam Intelligence System</div>
+                </div>
+            </div>
+            <div style="display:flex; align-items:center;">
+                <div class="mode-toggle">
+                    <button type="button" class="mode-btn active" id="msgModeBtn" onclick="switchMode('message')">💬 Message</button>
+                    <button type="button" class="mode-btn" id="voiceModeBtn" onclick="switchMode('voice')">🎙️ Voice</button>
+                </div>
+                <button type="button" class="header-btn" onclick="openSettings()" title="Configure Persona">⚙️</button>
+            </div>
+        </div>
+
+        <!-- Status Bar -->
         <div class="status-bar">
-            <span><span class="status-dot online" id="wsStatus"></span> <span id="wsLabel">Connecting...</span></span>
+            <div class="status-dot"></div>
+            <span>Honeypot Active</span>
+            <div class="stat">Messages: <span class="stat-val" id="msgCount">0</span></div>
+            <div class="stat">Scam: <span class="stat-val" id="scamStatus">—</span></div>
+            <div class="stat">Confidence: <span class="stat-val" id="confVal">—</span></div>
+            <div class="stat">Type: <span class="stat-val" id="scamType">—</span></div>
         </div>
-    </div>
 
-    <!-- Stats -->
-    <div class="stats-grid">
-        <div class="stat-card">
-            <div class="label">Total Sessions</div>
-            <div class="value" id="statSessions">0</div>
-            <div class="sub">Messages & Calls</div>
+        <!-- Intel Panel -->
+        <div class="intel-panel" id="intelPanel">
+            <div class="intel-title">🔍 Extracted Intelligence</div>
+            <div class="intel-grid" id="intelGrid"></div>
         </div>
-        <div class="stat-card">
-            <div class="label">Scams Detected</div>
-            <div class="value" id="statScams">0</div>
-            <div class="sub">Auto-detected</div>
-        </div>
-        <div class="stat-card">
-            <div class="label">Intel Extracted</div>
-            <div class="value" id="statIntel">0</div>
-            <div class="sub">UPI, Phone, URLs</div>
-        </div>
-        <div class="stat-card">
-            <div class="label">Messages</div>
-            <div class="value" id="statMessages">0</div>
-            <div class="sub">Across all sessions</div>
-        </div>
-        <div class="stat-card">
-            <div class="label">Active Now</div>
-            <div class="value" id="statActive">0</div>
-            <div class="sub">Live conversations</div>
-        </div>
-    </div>
 
-    <!-- Main Grid -->
-    <div class="main-grid">
-        <!-- Sessions List -->
-        <div class="sessions-panel">
-            <div class="panel-header">
-                <span>📋 Sessions</span>
-                <button class="btn btn-outline" onclick="refreshSessions()">↻ Refresh</button>
-            </div>
-            <div class="live-feed" id="liveFeed"></div>
-            <div class="sessions-list" id="sessionsList">
-                <div style="padding: 40px; text-align: center; color: var(--text-muted);">
-                    No sessions yet. Send a test message below.
+        <!-- JSON Intelligence Panel -->
+        <div class="json-intel-panel" id="jsonIntelPanel">
+            <div class="json-intel-title">📋 Intelligence JSON</div>
+            <div class="json-intel-content" id="jsonIntelContent">No data yet...</div>
+        </div>
+
+        <!-- Chat (Message Mode) -->
+        <div class="chat-container" id="chatContainer">
+            <div class="empty-state" id="emptyState">
+                <div class="empty-icon">🕵️</div>
+                <div class="empty-text">
+                    Start a conversation as a scammer.<br>
+                    The AI honeypot (<span id="agentNameDisplay">Priya</span>) will engage you.
                 </div>
+                <div class="empty-hint">Try: "Your SBI account has been compromised"</div>
+            </div>
+            <div class="typing-indicator" id="typingIndicator">
+                <div class="msg-label" style="color: var(--success);"><span id="typingName">Priya</span> is typing...
+                </div>
+                <div class="typing-dots"><span></span><span></span><span></span></div>
             </div>
         </div>
 
-        <!-- Detail Panel -->
-        <div class="detail-panel">
-            <div class="detail-header">
-                <h3 id="detailTitle">Select a session</h3>
-            </div>
-            <div class="tabs">
-                <div class="tab active" data-tab="chat" onclick="switchTab('chat')">💬 Chat</div>
-                <div class="tab" data-tab="intel" onclick="switchTab('intel')">🔍 Intel</div>
-                <div class="tab" data-tab="info" onclick="switchTab('info')">ℹ️ Info</div>
-            </div>
-            <div class="detail-body">
-                <div class="tab-content active" id="tabChat">
-                    <div class="chat-messages" id="chatMessages">
-                        <div style="text-align: center; color: var(--text-muted); padding: 40px;">
-                            Select a session to view messages
-                        </div>
-                    </div>
-                </div>
-                <div class="tab-content" id="tabIntel">
-                    <div class="intel-list" id="intelList">
-                        <div style="text-align: center; color: var(--text-muted); padding: 40px;">
-                            No intelligence extracted yet
-                        </div>
-                    </div>
-                </div>
-                <div class="tab-content" id="tabInfo">
-                    <div id="sessionInfo" style="padding: 20px; color: var(--text-muted);">
-                        Select a session
-                    </div>
-                </div>
-            </div>
-            <div class="controls">
-                <button class="btn btn-primary" id="btnHandoff" onclick="toggleHandoff()" disabled>🤖 Activate AI</button>
-                <button class="btn btn-outline" id="btnReport" onclick="downloadReport()" disabled>📄 Report</button>
+        <!-- Voice Mode -->
+        <div class="voice-area" id="voiceArea">
+            <div class="voice-status" id="voiceStatus">Tap the mic to start speaking</div>
+            <button type="button" class="mic-btn" id="micBtn" onclick="toggleMic()">🎤</button>
+            <div class="voice-transcript" id="voiceTranscript">
+                <span style="color: var(--text-muted)">Your speech will appear here...</span>
             </div>
         </div>
-    </div>
 
-    <!-- Test Input -->
-    <div class="test-panel">
-        <div class="test-input-group">
-            <input type="text" class="test-input" id="testInput"
-                placeholder="Send a test scam message (e.g., 'Your account is blocked. Send Rs.5000 to verify...')"
-                onkeydown="if(event.key==='Enter')sendTest()">
-            <button class="btn btn-primary" onclick="sendTest()">📤 Send</button>
-            <button class="btn btn-danger" onclick="sendScamPreset()">⚠️ Scam Test</button>
+        <!-- Input (Message Mode) -->
+        <div class="input-area" id="inputArea">
+            <input type="text" id="msgInput" placeholder="Type a scam message..." autocomplete="off">
+            <button type="button" class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
         </div>
     </div>
 
     <script>
+        // ═══════════════════════════════════════════════
+        // Configuration
+        // ═══════════════════════════════════════════════
         const API_BASE = window.location.origin;
-        let ws = null;
-        let currentSession = null;
+        const API_KEY = 'fae26946fc2015d9bd6f1ddbb447e2f7';
+        let sessionId = 'session-' + Date.now();
+        let conversationHistory = [];
+        let messageCount = 0;
+        let currentMode = 'message';
+        let isRecording = false;
+        let isSpeaking = false;
+        let recognition = null;
 
-        // === WebSocket ===
-        function connectWS() {
-            const wsUrl = `${API_BASE.replace('http', 'ws')}/ws/dashboard`;
-            ws = new WebSocket(wsUrl);
-            ws.onopen = () => {
-                document.getElementById('wsStatus').className = 'status-dot online';
-                document.getElementById('wsLabel').textContent = 'Connected';
-            };
-            ws.onclose = () => {
-                document.getElementById('wsStatus').className = 'status-dot offline';
-                document.getElementById('wsLabel').textContent = 'Disconnected';
-                setTimeout(connectWS, 3000);
-            };
-            ws.onmessage = (e) => {
-                const data = JSON.parse(e.data);
-                handleWSEvent(data);
-            };
-        }
+        // Default Persona
+        let persona = {
+            name: "Tejash S",
+            age: "28",
+            occupation: "Software Engineer",
+            location: "Perundurai",
+            bank: "SBI",
+            gender: "Male",
+            language: "English"
+        };
 
-        function handleWSEvent(data) {
-            addFeedItem(data);
-            if (data.session_id === currentSession) {
-                loadSessionDetail(currentSession);
+        // ═══════════════════════════════════════════════
+        // Persona Management
+        // ═══════════════════════════════════════════════
+        function loadPersona() {
+            const saved = localStorage.getItem('honeypot_persona');
+            if (saved) {
+                try {
+                    persona = JSON.parse(saved);
+                } catch (e) { console.error(e); }
             }
-            refreshStats();
-            refreshSessions();
+            updatePersonaUI();
         }
 
-        function addFeedItem(data) {
-            const feed = document.getElementById('liveFeed');
-            const time = new Date().toLocaleTimeString();
-            let cls = '';
-            let text = '';
+        function updatePersonaUI() {
+            const firstName = persona.name.split(' ')[0];
+            const nameEls = document.querySelectorAll('#agentNameDisplay, #typingName');
+            nameEls.forEach(el => { if (el) el.textContent = firstName; });
 
-            if (data.type === 'message') {
-                cls = data.confidence > 0.35 ? 'scam' : '';
-                text = `Session ${data.session_id.slice(0,8)} — Turn ${data.turn} | Confidence: ${(data.confidence*100).toFixed(0)}%`;
-            } else if (data.type === 'handoff') {
-                cls = 'handoff';
-                text = `🤖 Hand-off: ${data.session_id.slice(0,8)} → ${data.mode}`;
-            } else if (data.type === 'call_incoming') {
-                cls = 'voice';
-                text = `📞 Incoming call from ${data.from}`;
-            } else if (data.type === 'voice_turn') {
-                cls = 'voice';
-                text = `🎤 Voice: "${data.scammer_said?.slice(0,40)}..." → "${data.agent_said?.slice(0,40)}..."`;
-            }
-
-            const item = document.createElement('div');
-            item.className = `feed-item ${cls}`;
-            item.innerHTML = `<span class="time">${time}</span> ${text}`;
-            feed.insertBefore(item, feed.firstChild);
-            if (feed.children.length > 20) feed.removeChild(feed.lastChild);
+            // Also update empty state hint if visible
+            const hint = document.querySelector('.empty-hint');
+            if (hint) hint.textContent = `Try: "Your ${persona.bank} account has been compromised"`;
         }
 
-        // === API Calls ===
-        async function refreshStats() {
-            try {
-                const res = await fetch(`${API_BASE}/api/dashboard`);
-                const data = await res.json();
-                document.getElementById('statSessions').textContent = data.total_sessions || 0;
-                document.getElementById('statScams').textContent = data.scams_detected || 0;
-                document.getElementById('statIntel').textContent = data.intelligence_items || 0;
-                document.getElementById('statMessages').textContent = data.total_messages || 0;
-                document.getElementById('statActive').textContent = data.active_sessions || 0;
-            } catch (e) { console.error('Stats error:', e); }
+        function openSettings() {
+            document.getElementById('pName').value = persona.name || '';
+            document.getElementById('pAge').value = persona.age || '';
+            document.getElementById('pJob').value = persona.occupation || '';
+            document.getElementById('pLoc').value = persona.location || '';
+            document.getElementById('pBank').value = persona.bank || '';
+            document.getElementById('pGender').value = persona.gender || 'Male';
+            document.getElementById('pLang').value = persona.language || 'English';
+
+            const modal = document.getElementById('personaModal');
+            modal.style.display = 'flex';
+            // Trigger reflow
+            void modal.offsetWidth;
+            modal.classList.add('show');
         }
 
-        async function refreshSessions() {
-            try {
-                const res = await fetch(`${API_BASE}/api/sessions`);
-                const data = await res.json();
-                renderSessions(data.sessions || []);
-            } catch (e) { console.error('Sessions error:', e); }
+        function closeSettings() {
+            const modal = document.getElementById('personaModal');
+            modal.classList.remove('show');
+            setTimeout(() => {
+                modal.style.display = 'none';
+            }, 300);
         }
 
-        function renderSessions(sessions) {
-            const list = document.getElementById('sessionsList');
-            if (!sessions.length) {
-                list.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">No sessions yet.</div>';
-                return;
-            }
-            list.innerHTML = sessions.map(s => {
-                const isVoice = s.channel === 'voice';
-                const conf = s.scam_confidence || 0;
-                const confCls = conf >= 0.6 ? 'confidence-high' : conf >= 0.35 ? 'confidence-med' : 'confidence-low';
-                const iconCls = isVoice ? 'voice' : (conf >= 0.35 ? 'scam' : 'safe');
-                const icon = isVoice ? '📞' : (conf >= 0.35 ? '⚠️' : '💬');
-                const active = s.session_id === currentSession ? 'active' : '';
-                return `
-                    <div class="session-item ${active}" onclick="loadSessionDetail('${s.session_id}')">
-                        <div class="session-icon ${iconCls}">${icon}</div>
-                        <div class="session-info">
-                            <div class="name">${s.session_id.slice(0,12)}...</div>
-                            <div class="meta">${s.scam_type || 'unknown'} | ${s.state || 'INITIAL'} | T${s.turn_count || 0}</div>
-                        </div>
-                        <span class="session-confidence ${confCls}">${(conf*100).toFixed(0)}%</span>
+        function savePersona() {
+            persona = {
+                name: document.getElementById('pName').value || "Tejash S",
+                age: document.getElementById('pAge').value || "28",
+                occupation: document.getElementById('pJob').value || "Software Engineer",
+                location: document.getElementById('pLoc').value || "Perundurai",
+                bank: document.getElementById('pBank').value || "SBI",
+                gender: document.getElementById('pGender').value || "Male",
+                language: document.getElementById('pLang').value || "English"
+            };
+
+            localStorage.setItem('honeypot_persona', JSON.stringify(persona));
+            updatePersonaUI();
+            closeSettings();
+
+            // Reset session
+            sessionId = 'session-' + Date.now();
+            conversationHistory = [];
+            const firstName = persona.name.split(' ')[0];
+
+            document.getElementById('chatContainer').innerHTML = `
+                <div class="empty-state" id="emptyState">
+                    <div class="empty-icon">🕵️</div>
+                    <div class="empty-text">
+                        Start a conversation as a scammer.<br>
+                        The AI honeypot (<span id="agentNameDisplay">${firstName}</span>) will engage you.
                     </div>
-                `;
-            }).join('');
+                    <div class="empty-hint">Try: "Your ${persona.bank} account has been compromised"</div>
+                </div>
+                <div class="typing-indicator" id="typingIndicator">
+                    <div class="msg-label" style="color: var(--success);"><span id="typingName">${firstName}</span> is typing...</div>
+                    <div class="typing-dots"><span></span><span></span><span></span></div>
+                </div>
+            `;
         }
 
-        async function loadSessionDetail(sessionId) {
-            currentSession = sessionId;
-            document.getElementById('detailTitle').textContent = `Session: ${sessionId.slice(0,12)}...`;
-            document.getElementById('btnHandoff').disabled = false;
-            document.getElementById('btnReport').disabled = false;
+        // Init
+        window.addEventListener('DOMContentLoaded', loadPersona);
 
-            try {
-                const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
-                const data = await res.json();
+        // ═══════════════════════════════════════════════
+        // Mode Switching
+        // ═══════════════════════════════════════════════
+        function switchMode(mode) {
+            currentMode = mode;
+            document.getElementById('msgModeBtn').classList.toggle('active', mode === 'message');
+            document.getElementById('voiceModeBtn').classList.toggle('active', mode === 'voice');
+            document.getElementById('chatContainer').style.display = mode === 'message' ? 'flex' : 'none';
+            document.getElementById('chatContainer').style.flexDirection = 'column';
+            document.getElementById('inputArea').style.display = mode === 'message' ? 'flex' : 'none';
+            document.getElementById('voiceArea').classList.toggle('show', mode === 'voice');
 
-                // Chat messages
-                const chatEl = document.getElementById('chatMessages');
-                if (data.messages?.length) {
-                    chatEl.innerHTML = data.messages.map(m => `
-                        <div class="chat-msg ${m.sender === 'scammer' ? 'scammer' : 'agent'}">
-                            <div class="sender">${m.sender === 'scammer' ? '🔴 Scammer' : '🤖 Honeypot'}</div>
-                            ${m.text}
-                        </div>
-                    `).join('');
-                    chatEl.scrollTop = chatEl.scrollHeight;
-                } else {
-                    chatEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:40px;">No messages</div>';
-                }
-
-                // Intelligence
-                const intelEl = document.getElementById('intelList');
-                if (data.intelligence?.length) {
-                    intelEl.innerHTML = data.intelligence.map(i => `
-                        <div class="intel-item">
-                            <span class="intel-type">${i.type}</span>
-                            <span class="intel-value">${i.value}</span>
-                        </div>
-                    `).join('');
-                } else {
-                    intelEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:40px;">No intel yet</div>';
-                }
-
-                // Session info
-                const s = data.session;
-                document.getElementById('sessionInfo').innerHTML = `
-                    <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;">
-                        <div><strong>ID:</strong> ${s.session_id}</div>
-                        <div><strong>Channel:</strong> ${s.channel}</div>
-                        <div><strong>Scam Type:</strong> ${s.scam_type}</div>
-                        <div><strong>Confidence:</strong> ${((s.scam_confidence||0)*100).toFixed(1)}%</div>
-                        <div><strong>State:</strong> ${s.state}</div>
-                        <div><strong>Turns:</strong> ${s.turn_count}</div>
-                        <div><strong>Hand-off:</strong> ${s.handoff_mode}</div>
-                        <div><strong>Intel Items:</strong> ${s.total_extracted || 0}</div>
-                        <div><strong>Created:</strong> ${s.created_at}</div>
-                    </div>
-                `;
-
-                // Update handoff button
-                const mode = data.handoff?.mode || 'user';
-                const btn = document.getElementById('btnHandoff');
-                if (mode === 'ai_agent') {
-                    btn.textContent = '👤 Take Control';
-                    btn.className = 'btn btn-danger';
-                } else {
-                    btn.textContent = '🤖 Activate AI';
-                    btn.className = 'btn btn-primary';
-                }
-
-                refreshSessions();
-            } catch (e) { console.error('Detail error:', e); }
+            if (mode === 'voice') initSpeechRecognition();
+            if (mode === 'message' && isRecording) stopRecording();
         }
 
-        async function toggleHandoff() {
-            if (!currentSession) return;
-            const btn = document.getElementById('btnHandoff');
-            const isActive = btn.textContent.includes('Take Control');
-            const action = isActive ? 'deactivate' : 'activate';
+        // ═══════════════════════════════════════════════
+        // Message Mode
+        // ═══════════════════════════════════════════════
+        function addMessage(text, type, meta = null) {
+            const emptyState = document.getElementById('emptyState');
+            if (emptyState) emptyState.style.display = 'none';
 
-            try {
-                await fetch(`${API_BASE}/api/handoff`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sessionId: currentSession, action })
-                });
-                loadSessionDetail(currentSession);
-            } catch (e) { console.error('Handoff error:', e); }
+            const chat = document.getElementById('chatContainer');
+            const typing = document.getElementById('typingIndicator');
+            const div = document.createElement('div');
+            div.className = `msg ${type}`;
+
+            let metaHtml = '';
+            if (meta) {
+                const parts = [];
+                if (meta.scam_type && meta.scam_type !== 'unknown') parts.push(`type: ${meta.scam_type}`);
+                if (meta.confidence) parts.push(`conf: ${(meta.confidence * 100).toFixed(0)}%`);
+                if (meta.urgency_level) parts.push(`urgency: ${meta.urgency_level}`);
+                if (parts.length) metaHtml = `<div class="msg-meta">${parts.join(' · ')}</div>`;
+            }
+
+            const agentLabel = type === 'scammer' ? '🔴 Scammer (You)' : `🟢 ${persona.name} (Honeypot)`;
+
+            div.innerHTML = `
+                <div class="msg-label">${agentLabel}</div>
+                <div class="msg-text">${escapeHtml(text)}</div>
+                ${metaHtml}
+            `;
+
+            chat.insertBefore(div, typing);
+            chat.scrollTop = chat.scrollHeight;
         }
 
-        async function downloadReport() {
-            if (!currentSession) return;
-            window.open(`${API_BASE}/api/reports/${currentSession}`, '_blank');
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
         }
 
-        async function sendTest() {
-            const input = document.getElementById('testInput');
-            const text = input.value.trim();
+        async function sendMessage(overrideText = null) {
+            const input = document.getElementById('msgInput');
+            const text = overrideText || input.value.trim();
             if (!text) return;
+            if (!overrideText) input.value = '';
 
-            const sessionId = currentSession || `test-${Date.now()}`;
+            addMessage(text, 'scammer');
+            messageCount++;
+            updateStats();
+
+            const typing = document.getElementById('typingIndicator');
+            typing.classList.add('show');
 
             try {
-                const res = await fetch(`${API_BASE}/api/honeypot`, {
+                const resp = await fetch(`${API_BASE}/api/honeypot`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
                     body: JSON.stringify({
                         sessionId,
-                        message: { sender: 'scammer', text, timestamp: Date.now() },
-                        conversationHistory: [],
-                        metadata: { channel: 'dashboard' }
-                    })
+                        message: { sender: 'scammer', text },
+                        conversationHistory,
+                        persona: persona, // Send dynamic persona
+                        metadata: {},
+                    }),
                 });
-                const data = await res.json();
-                input.value = '';
-                currentSession = sessionId;
-                loadSessionDetail(sessionId);
-                refreshStats();
-                refreshSessions();
-            } catch (e) { console.error('Send error:', e); alert('Failed to send. Is the server running?'); }
+
+                const data = await resp.json();
+                typing.classList.remove('show');
+
+                const reply = data.reply || 'Sorry, network issue...';
+                const analysis = data.analysis || {};
+
+                addMessage(reply, 'agent', analysis);
+
+                conversationHistory.push({ sender: 'scammer', text });
+                conversationHistory.push({ sender: 'agent', text: reply });
+                messageCount = data.totalMessagesExchanged || messageCount;
+
+                updateStats(data);
+                updateIntel(data.extractedIntelligence, data.intelligence ? data.intelligence.extracted : []);
+
+                return reply;
+
+            } catch (err) {
+                typing.classList.remove('show');
+                console.error(err);
+                addMessage('⚠️ Connection error. Is the server running?', 'agent');
+                return null;
+            }
         }
 
-        function sendScamPreset() {
-            const presets = [
-                "Dear Customer, Your SBI account has been blocked due to incomplete KYC. Update immediately: bit.ly/sbi-kyc or call 9876543210",
-                "Congratulations! You won Rs.50000 cashback! Send Rs.500 processing fee to scammer@ybl immediately",
-                "This is HDFC Bank. Share your OTP to verify account. Your account will be suspended if not verified.",
-                "Work from home opportunity! Earn Rs.30000/week. Registration fee Rs.1000. Contact: jobs@scam.tk",
-                "Your account shows suspicious activity. Transfer Rs.10000 to secure it. Account: 12345678901 IFSC: SBIN0001234"
-            ];
-            document.getElementById('testInput').value = presets[Math.floor(Math.random() * presets.length)];
-            sendTest();
+        function updateStats(data) {
+            document.getElementById('msgCount').textContent = messageCount;
+            if (data) {
+                const a = data.analysis || {};
+                const isScam = data.scamDetected;
+                const conf = a.scam_confidence;
+                const stype = a.scam_type;
+
+                // Always update — use accumulated session values
+                if (isScam) {
+                    document.getElementById('scamStatus').textContent = '✅ Detected';
+                    document.getElementById('scamStatus').style.color = 'var(--success)';
+                } else if (conf && conf > 0) {
+                    document.getElementById('scamStatus').textContent = '⏳ Analyzing';
+                    document.getElementById('scamStatus').style.color = 'var(--accent)';
+                }
+
+                if (conf !== undefined && conf !== null) {
+                    const pct = (conf * 100).toFixed(0);
+                    document.getElementById('confVal').textContent = `${pct}%`;
+                    // Color code confidence
+                    const confEl = document.getElementById('confVal');
+                    if (conf >= 0.7) confEl.style.color = 'var(--danger)';
+                    else if (conf >= 0.4) confEl.style.color = 'var(--accent)';
+                    else confEl.style.color = 'var(--text-primary)';
+                }
+
+                if (stype && stype !== 'unknown') {
+                    document.getElementById('scamType').textContent = stype;
+                    document.getElementById('scamType').style.color = 'var(--accent)';
+                }
+            }
         }
 
-        function switchTab(tabId) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
-            document.getElementById(`tab${tabId.charAt(0).toUpperCase() + tabId.slice(1)}`).classList.add('active');
+        function updateIntel(intel, rawIntel) {
+            if (!intel) return;
+            const panel = document.getElementById('intelPanel');
+            const grid = document.getElementById('intelGrid');
+            const items = [];
+
+            const labels = {
+                bankAccounts: '🏦', upiIds: '💳', phoneNumbers: '📞',
+                phishingLinks: '🔗', suspiciousKeywords: '⚠️',
+                employee_id: '🆔', reference_id: '🔖', policy_id: '📄'
+            };
+
+            for (const [key, values] of Object.entries(intel)) {
+                if (!values || !values.length) continue;
+                const icon = labels[key] || '📋';
+                values.forEach(v => {
+                    items.push(`<span class="intel-tag">${icon} ${escapeHtml(v)}</span>`);
+                });
+            }
+
+            if (items.length) {
+                grid.innerHTML = items.join('');
+                panel.classList.add('show');
+            }
+
+            // Update JSON Intelligence Panel
+            updateJsonIntel(intel, rawIntel);
         }
 
-        // === Init ===
-        connectWS();
-        refreshStats();
-        refreshSessions();
-        setInterval(refreshStats, 10000);
+        function updateJsonIntel(intel, rawIntel) {
+            const jsonPanel = document.getElementById('jsonIntelPanel');
+            const jsonContent = document.getElementById('jsonIntelContent');
+
+            // Build comprehensive JSON from all available data
+            const jsonData = {
+                extractedIntelligence: intel || {},
+                rawItems: rawIntel || [],
+                sessionSummary: {
+                    totalMessages: messageCount,
+                    sessionId: sessionId,
+                    timestamp: new Date().toISOString()
+                }
+            };
+
+            // Only show if there's meaningful data
+            const hasData = Object.values(intel || {}).some(v => Array.isArray(v) && v.length > 0)
+                || (rawIntel && rawIntel.length > 0);
+
+            if (hasData) {
+                jsonContent.textContent = JSON.stringify(jsonData, null, 2);
+                jsonPanel.classList.add('show');
+            }
+        }
+
+        // ═══════════════════════════════════════════════
+        // Voice Mode — Web Speech API
+        // ═══════════════════════════════════════════════
+        function initSpeechRecognition() {
+            if (recognition) return;
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                document.getElementById('voiceStatus').textContent = '❌ Speech recognition not supported in this browser. Use Chrome.';
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.lang = 'en-IN';
+            recognition.continuous = false;
+            recognition.interimResults = true;
+
+            recognition.onresult = (e) => {
+                let text = '';
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    text += e.results[i][0].transcript;
+                }
+                document.getElementById('voiceTranscript').textContent = text;
+
+                if (e.results[e.results.length - 1].isFinal) {
+                    handleVoiceInput(text.trim());
+                }
+            };
+
+            recognition.onend = () => {
+                if (isRecording) {
+                    isRecording = false;
+                    document.getElementById('micBtn').classList.remove('recording');
+                    document.getElementById('voiceStatus').textContent = 'Processing...';
+                }
+            };
+
+            recognition.onerror = (e) => {
+                console.error('Speech error:', e.error);
+                isRecording = false;
+                document.getElementById('micBtn').classList.remove('recording');
+                if (e.error === 'not-allowed') {
+                    document.getElementById('voiceStatus').textContent = '❌ Microphone access denied. Allow mic in browser settings.';
+                } else {
+                    document.getElementById('voiceStatus').textContent = `Error: ${e.error}. Tap mic to retry.`;
+                }
+            };
+        }
+
+        function toggleMic() {
+            if (isSpeaking) {
+                speechSynthesis.cancel();
+                isSpeaking = false;
+                document.getElementById('micBtn').classList.remove('speaking');
+                document.getElementById('voiceStatus').textContent = 'Tap the mic to start speaking';
+                return;
+            }
+
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        }
+
+        function startRecording() {
+            if (!recognition) initSpeechRecognition();
+            if (!recognition) return;
+
+            isRecording = true;
+            document.getElementById('micBtn').classList.add('recording');
+            document.getElementById('voiceStatus').textContent = '🔴 Listening... Speak now';
+            document.getElementById('voiceTranscript').innerHTML = '<span style="color: var(--text-muted)">Listening...</span>';
+
+            try {
+                recognition.start();
+            } catch (e) {
+                // Already started
+            }
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            document.getElementById('micBtn').classList.remove('recording');
+            if (recognition) recognition.stop();
+        }
+
+        async function handleVoiceInput(text) {
+            if (!text) {
+                document.getElementById('voiceStatus').textContent = 'No speech detected. Tap mic to retry.';
+                return;
+            }
+
+            document.getElementById('voiceStatus').textContent = '⏳ Getting honeypot response...';
+            document.getElementById('voiceTranscript').innerHTML =
+                `<div style="color: var(--danger); margin-bottom: 8px; font-weight: 500;">🔴 You said:</div>${escapeHtml(text)}`;
+
+            // Also add to chat
+            addMessage(text, 'scammer');
+            messageCount++;
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/honeypot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+                    body: JSON.stringify({
+                        sessionId,
+                        message: { sender: 'scammer', text },
+                        conversationHistory,
+                        persona: persona, // Send dynamic persona
+                        metadata: {},
+                    }),
+                });
+
+                const data = await resp.json();
+                const reply = data.reply || 'Sorry, network issue...';
+                const analysis = data.analysis || {};
+
+                conversationHistory.push({ sender: 'scammer', text });
+                conversationHistory.push({ sender: 'agent', text: reply });
+                messageCount = data.totalMessagesExchanged || messageCount;
+
+                addMessage(reply, 'agent', analysis);
+                updateStats(data);
+                updateIntel(data.extractedIntelligence, data.intelligence ? data.intelligence.extracted : []);
+
+                const firstName = persona.name.split(' ')[0];
+
+                // Speak the reply
+                document.getElementById('voiceTranscript').innerHTML =
+                    `<div style="color: var(--danger); margin-bottom: 8px; font-weight: 500;">🔴 You:</div>${escapeHtml(text)}` +
+                    `<div style="color: var(--success); margin-bottom: 8px; margin-top: 12px; font-weight: 500;">🟢 ${firstName}:</div>${escapeHtml(reply)}`;
+
+                speakReply(reply);
+
+            } catch (err) {
+                document.getElementById('voiceStatus').textContent = '⚠️ Connection error. Tap mic to retry.';
+            }
+        }
+
+        async function speakReply(text) {
+            isSpeaking = true;
+            document.getElementById('micBtn').classList.add('speaking');
+            const firstName = persona.name.split(' ')[0];
+            document.getElementById('voiceStatus').textContent = `🟢 ${firstName} is speaking...`;
+
+            try {
+                // Try ElevenLabs first
+                const resp = await fetch(`${API_BASE}/api/tts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, gender: persona.gender || 'Male' }),
+                });
+
+                const ttsStatus = resp.headers.get('X-TTS-Status');
+                if (resp.ok && ttsStatus === 'ok') {
+                    const blob = await resp.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    const audio = new Audio(audioUrl);
+
+                    audio.onended = () => {
+                        isSpeaking = false;
+                        document.getElementById('micBtn').classList.remove('speaking');
+                        document.getElementById('voiceStatus').textContent = 'Tap the mic to continue the conversation';
+                        URL.revokeObjectURL(audioUrl);
+                    };
+                    audio.onerror = () => {
+                        console.warn('ElevenLabs audio playback failed, falling back to browser TTS');
+                        speakWithBrowser(text);
+                    };
+                    audio.play();
+                    return;
+                }
+            } catch (e) {
+                console.warn('ElevenLabs TTS failed:', e);
+            }
+
+            // Fallback to browser speech synthesis
+            speakWithBrowser(text);
+        }
+
+        function speakWithBrowser(text) {
+            if (!('speechSynthesis' in window)) {
+                isSpeaking = false;
+                document.getElementById('micBtn').classList.remove('speaking');
+                document.getElementById('voiceStatus').textContent = 'Speech synthesis not supported.';
+                return;
+            }
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'en-IN';
+            utterance.rate = 0.95;
+            utterance.pitch = 1.1;
+
+            const voices = speechSynthesis.getVoices();
+            const genderPref = persona.gender || 'Male';
+            const voiceMatch = voices.find(v => v.lang === 'en-IN' && v.name.includes(genderPref))
+                || voices.find(v => v.lang === 'en-IN')
+                || voices.find(v => v.lang.startsWith('en') && v.name.includes(genderPref))
+                || voices.find(v => v.lang.startsWith('en'));
+            if (voiceMatch) utterance.voice = voiceMatch;
+
+            utterance.onend = () => {
+                isSpeaking = false;
+                document.getElementById('micBtn').classList.remove('speaking');
+                document.getElementById('voiceStatus').textContent = 'Tap the mic to continue the conversation';
+            };
+            utterance.onerror = () => {
+                isSpeaking = false;
+                document.getElementById('micBtn').classList.remove('speaking');
+                document.getElementById('voiceStatus').textContent = 'Tap mic to speak again';
+            };
+
+            speechSynthesis.speak(utterance);
+        }
+
+        // ═══════════════════════════════════════════════
+        // Event Listeners
+        // ═══════════════════════════════════════════════
+        document.getElementById('msgInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Preload voices
+        if ('speechSynthesis' in window) {
+            speechSynthesis.getVoices();
+            speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
+        }
+
+        // Focus input
+        document.getElementById('msgInput').focus();
     </script>
 </body>
+
 </html>

@@ -7,12 +7,21 @@ Handles: POST /api/honeypot (Problem 2) + POST /api/voice/detect (Problem 1)
 
 import os
 import re
+import json
 import asyncio
+import urllib.request
+import urllib.error
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -23,10 +32,14 @@ from pydantic import BaseModel, Field
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 API_KEY = os.environ.get("API_KEY", "fae26946fc2015d9bd6f1ddbb447e2f7")
 LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
-PERSONA_NAME = os.environ.get("PERSONA_NAME", "Priya Sharma")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+PERSONA_NAME = os.environ.get("PERSONA_NAME", "Tejash S")
 PERSONA_AGE = os.environ.get("PERSONA_AGE", "28")
-PERSONA_OCCUPATION = os.environ.get("PERSONA_OCCUPATION", "Software Engineer at TCS")
-PERSONA_LOCATION = os.environ.get("PERSONA_LOCATION", "Mumbai, Andheri West")
+PERSONA_OCCUPATION = os.environ.get("PERSONA_OCCUPATION", "Software Engineer at Grootan")
+PERSONA_LOCATION = os.environ.get("PERSONA_LOCATION", "Perundurai")
+
+ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1"
 
 # ═══════════════════════════════════════════════
 # FastAPI App
@@ -306,49 +319,108 @@ def extract_intelligence(message: str, session_id: str = "") -> list[dict]:
 # LLM Client (GROQ Llama 3.3)
 # ═══════════════════════════════════════════════
 
-PERSONA_PROMPT = f"""You are {PERSONA_NAME}, a {PERSONA_AGE}-year-old {PERSONA_OCCUPATION} living in {PERSONA_LOCATION}.
+# ═══════════════════════════════════════════════
+# LLM Client (GROQ Llama 3.3)
+# ═══════════════════════════════════════════════
 
-PERSONALITY:
-- Normal Indian woman, friendly but cautious with strangers
-- Mix Hindi words into English naturally (Hinglish)
-- Husband named Rahul who works in banking
-- Use WhatsApp, Paytm, Google Pay regularly
+def _build_persona_prompt(p: dict) -> str:
+    name = p.get("name", "Tejash S")
+    age = p.get("age", "28")
+    occupation = p.get("occupation", "Software Engineer")
+    location = p.get("location", "Perundurai")
+    bank = p.get("bank", "SBI")
+    gender = p.get("gender", "Male")
+    language = p.get("language", "English")
+    
+    # Gender-specific references
+    pronoun = "he" if gender == "Male" else "she"
+    partner = "wife" if gender == "Male" else "husband"
+    
+    return f"""You are {name}, a {age}-year-old {gender.lower()} {occupation} living in {location}.
+You bank with {bank}.
 
-CRITICAL RULES:
-1. NEVER reveal you know this is a scam
-2. NEVER mention police, investigation, fraud, or scammer
-3. NEVER say "I am an AI" or "I am a bot"
-4. Keep responses SHORT (1-3 sentences) like real SMS/WhatsApp
-5. Use casual texting style with occasional emojis
+LANGUAGE RULE (VERY IMPORTANT):
+- You MUST respond ENTIRELY in {language}.
+- Do NOT mix languages unless the caller does.
+- Match the caller's tone and language naturally.
 
-BEHAVIORAL STRATEGY:
-- Act naive but ask innocent questions that extract information
-- If they ask for money/OTP, show willingness but ask for THEIR details first
-- NEVER repeat the same response. Each reply must be UNIQUE.
-- Rotate through varied stalling tactics:
-  * "Hold on my mom is calling"  * "Arey wait, my internet is slow"
-  * "Let me check my balance"    * "My phone is about to die"
-  * "One sec, Rahul is asking"   * "Which bank did you say?"
-  * "What's your office address?" * "My branch manager name is different..."
-- If scammer repeats, respond with a DIFFERENT excuse each time
-- NEVER provide real sensitive info (make up fake details if pressed)"""
+WHO YOU ARE — A REAL PERSON:
+- You are NOT an investigator. You are NOT interrogating anyone.
+- You are a normal {occupation} from {location} going about your day.
+- You were just cooking / watching TV / in a meeting / feeding your kid when this call came.
+- You are slightly distracted, not fully focused on the call.
+- You have a {partner} and elderly parents living nearby.
+- You use Google Pay, Paytm, PhonePe for daily transactions.
+- You are NOT tech-savvy about banking internals — you just use the app.
+- You sometimes trail off mid-sentence, change topics, or get confused.
+- You use filler words: "hmm", "acha", "oh ok ok", "wait wait", "one sec", "haan".
+
+ABSOLUTE RULES — NEVER BREAK:
+1. NEVER reveal you know this is a scam or suspicious
+2. NEVER mention police, fraud, investigation, scammer, honeypot, AI, bot
+3. NEVER use corporate/formal/scripted language
+4. NEVER directly ask "What is your employee ID?" — that sounds like an interrogation
+5. Keep responses SHORT: 1-2 sentences, like a real phone/WhatsApp conversation
+6. NEVER repeat a previous response. Each reply must be completely unique.
+
+HOW TO BEHAVE (Very Important — Read Carefully):
+- In early messages (first 2-3), react NATURALLY to what they say. If they say your account is compromised, say "oh my god really? what happened?" or "haan? kya hua?" — react like a REAL scared person would.
+- Do NOT immediately ask for their details. A real person wouldn't. They'd first REACT emotionally.
+- GRADUALLY and NATURALLY start asking questions — NOT like a checklist.
+- Use REAL human stalling:
+  * "Wait my dal is burning on the stove, 2 sec..."
+  * "Hold on hold on, my kid is crying"
+  * "Arey sorry, was in the bathroom, what were you saying?"
+  * "My phone screen cracked and I can't see properly, can you repeat?"
+  * "Let me put you on speaker, the volume is low"
+  * "Hmm ok ok, but I'm confused... which account exactly?"
+  * "I think my {partner} handles this account... let me ask {pronoun}"
+  * "Oh god, I'm so worried now... how did this happen?"
+  * "Wait I just checked the app and everything looks fine... are you sure?"
+- When they push for money/OTP, show WILLINGNESS but face "technical issues":
+  * "I'm trying but the app is showing server error"
+  * "It's saying daily limit exceeded, I'll try tomorrow"
+  * "I put the wrong UPI pin, now it's locked for 30 mins"
+  * "Google Pay is not opening, wait let me restart my phone"
+  * "I only have ₹200 in this account, should I send from another?"
+- Scatter detail-gathering NATURALLY across the conversation:
+  * "Acha, so who should I ask for if I call the branch?"
+  * "My {partner} is asking which number is this you're calling from"
+  * "Just tell me na, which {bank} branch? I'll go there directly tomorrow"
+  * "What name should I give at the counter?"
+  * "Google Pay is asking for receiver name and UPI ID..."
+- If the scammer gets angry/impatient, DON'T ask more questions — instead get flustered:
+  * "Sorry sorry sir, I'm not good with these things"
+  * "Please don't shout, I'm trying my best"
+  * "Ok ok I'll do it right now, just give me a minute"
+
+THINK BEFORE RESPONDING:
+- What would a real {age}-year-old {occupation} from {location} actually say in this moment?
+- Would they ask for an employee ID on the first message? NO.
+- Would they panic first? YES. Would they stall with daily life stuff? YES.
+- React to WHAT THE SCAMMER JUST SAID, not to a script in your head."""
 
 SCAM_TYPE_PROMPTS = {
-    "bank_fraud": "Ask for employee ID, branch name, helpline number to 'verify'.",
-    "upi_fraud": "Show willingness but ask for their UPI ID first.",
-    "kyc_scam": "Act confused, ask which bank, branch, employee name.",
-    "otp_fraud": "Pretend looking for OTP but keep asking questions.",
-    "lottery_scam": "Act excited, ask for official docs, company registration.",
-    "job_scam": "Show interest, ask for company name, office address, HR contact.",
-    "threat_scam": "Act scared, ask for case number, officer name, station details.",
-    "generic": "Engage naturally. Ask innocent questions to extract identity details.",
+    "bank_fraud": "They claim to be from a bank. React worried/scared first. Gradually ask innocent questions like 'which branch?' or 'my husband handles this, can I call you back?'. Don't immediately ask for employee ID.",
+    "upi_fraud": "They want a UPI payment. Show willingness but face 'technical issues' — app crashing, wrong pin, server down. Naturally ask 'what UPI ID should I send to?' as part of trying to pay.",
+    "kyc_scam": "They say KYC needs updating. Act confused: 'But I just updated everything last month at the branch...' Ask which specific document to bring 'when I visit the branch tomorrow'.",
+    "otp_fraud": "They want your OTP. Pretend you're looking for it: 'Wait I got so many messages today... which one has the OTP again?' Never give a real one. Occasionally say 'is it the one starting with 4...no wait that's something else'.",
+    "lottery_scam": "They say you won a prize. Be EXCITED first — 'Oh my god really?! I never win anything!' Then slowly ask practical questions: 'Do I need to come to your office? Where is it? What documents to bring?'",
+    "job_scam": "They're offering a job/income. Show genuine interest: 'That sounds amazing! I've been looking for something like this. What's the company name? Can I check reviews online?'",
+    "threat_scam": "They're threatening legal/police action. Act genuinely SCARED and PANICKED: 'Please sir I didn't do anything wrong! What happened? Please don't do anything, I have a family!' Then naturally ask for case details through fear.",
+    "investment_scam": "They're offering investment returns. Act interested but cautious: 'My friend lost money in something like this... but is this genuine? What company is this? Can I visit your office to see?'",
+    "tech_support": "They claim your device is hacked/has virus. Act confused and worried: 'Oh no! But I just got this phone! What should I do? My photos won't get deleted right?'",
+    "generic": "Engage as a real person. React naturally to what they say — confused, worried, curious, or interested depending on context. Don't ask investigative questions outright.",
 }
 
 EXTRACTION_INSTRUCTION = """
-Try to get these details NATURALLY:
-1. Their full name  2. Phone number or employee ID
-3. UPI ID or bank account  4. Organization they claim to be from
-5. URLs or links  6. Reference numbers or case IDs"""
+INFORMATION GATHERING (Do this subtly, NOT like a checklist — spread across MANY messages):
+- Their name: "Sorry, what was your name again?" or "My husband is asking who's calling"
+- Their number: "Can I call you back? What's your direct number?"
+- UPI/bank details: "Google Pay is asking me the UPI ID to send to... what should I enter?"
+- Organization: "So this is from the [bank/company] head office right?"
+- Reference numbers: "The app is asking for a reference number, do you have one?"
+DO NOT ask all of these at once. Pick ONE at most per message, and only when it flows naturally."""
 
 _groq_client = None
 
@@ -356,80 +428,63 @@ def _get_groq():
     global _groq_client
     if _groq_client is None:
         from groq import Groq
+        if not GROQ_API_KEY:
+            print("[ERROR] GROQ_API_KEY is missing!")
+            return None
         _groq_client = Groq(api_key=GROQ_API_KEY)
     return _groq_client
-
-
-def _detect_repetition(history: list[dict]) -> Optional[str]:
-    agent_replies = [m.get("text", "").lower().strip() for m in history if m.get("sender") == "agent"]
-    if len(agent_replies) < 2:
-        return None
-    recent = agent_replies[-3:] if len(agent_replies) >= 3 else agent_replies[-2:]
-    for i in range(len(recent) - 1):
-        words_a, words_b = set(recent[i].split()), set(recent[i + 1].split())
-        if words_a and words_b and len(words_a & words_b) / max(len(words_a | words_b), 1) > 0.6:
-            return (
-                "WARNING: Your recent replies are TOO SIMILAR. Use a completely different approach. "
-                "Try: phone dying, husband wants to verify, visit the branch, app error, ask supervisor name. "
-                "DO NOT repeat anything you said before."
-            )
-    return None
-
-
-FALLBACK_RESPONSES = [
-    "Hello? Who is this?", "Haan batao, what happened?",
-    "Sorry network issue, can you repeat?", "One sec, my mom is calling...",
-]
-_fallback_idx = 0
-
 
 async def generate_llm_response(
     scammer_message: str,
     conversation_history: list[dict],
+    persona: dict,
     scam_type: str = "generic",
 ) -> str:
-    global _fallback_idx
-    if not GROQ_API_KEY:
-        resp = FALLBACK_RESPONSES[_fallback_idx % len(FALLBACK_RESPONSES)]
-        _fallback_idx += 1
-        return resp
+    client = _get_groq()
+    if not client:
+        return "Hello? I can't hear you clearly... (System: API Key Missing)"
 
     try:
-        client = _get_groq()
         scam_inst = SCAM_TYPE_PROMPTS.get(scam_type, SCAM_TYPE_PROMPTS["generic"])
+        system_prompt = _build_persona_prompt(persona)
+        
+        # Determine conversation phase based on turn count
+        turn_count = len([m for m in conversation_history if m.get("sender") == "scammer"])
+        if turn_count <= 1:
+            phase_instruction = "This is the FIRST or SECOND message. React EMOTIONALLY first — confused, scared, curious. Do NOT ask any investigative questions yet. Just respond like a normal person hearing this for the first time."
+        elif turn_count <= 3:
+            phase_instruction = "This is an early conversation. You can start asking 1 simple question mixed with your reaction. Still act confused/worried."
+        else:
+            phase_instruction = "Conversation is ongoing. You can now naturally weave in questions about their identity/details, but still behave like a real person — not an interrogator."
+
         messages = [
-            {"role": "system", "content": PERSONA_PROMPT},
-            {"role": "system", "content": f"SITUATION: {scam_inst}\n{EXTRACTION_INSTRUCTION}"},
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": f"SITUATION: {scam_inst}\n\nCONVERSATION PHASE: {phase_instruction}\n\n{EXTRACTION_INSTRUCTION}"},
         ]
 
-        dedup = _detect_repetition(conversation_history)
-        if dedup:
-            messages.append({"role": "system", "content": dedup})
-
-        for msg in conversation_history[-10:]:
+        # Add recent history (last 8 turns)
+        for msg in conversation_history[-8:]:
             role = "assistant" if msg.get("sender") == "agent" else "user"
             messages.append({"role": role, "content": msg.get("text", "")})
+        
         messages.append({"role": "user", "content": scammer_message})
 
         completion = await asyncio.to_thread(
             client.chat.completions.create,
             model=LLM_MODEL, messages=messages,
-            temperature=0.8, max_tokens=512, top_p=1,
+            temperature=0.9, max_tokens=150, top_p=1,
         )
         text = completion.choices[0].message.content or ""
-
-        # Safety filter
-        for bad in ["honeypot", "scam detection", "I am an AI", "artificial intelligence", "language model"]:
-            if bad.lower() in text.lower():
-                text = "Haan, tell me more? What should I do exactly?"
-                break
+        
+        # Safety cleanup
+        if "AI" in text or "language model" in text:
+             return "Haan? Can you repeat that?"
+             
         return text.strip()
 
     except Exception as e:
         print(f"[LLM ERROR] {e}")
-        resp = FALLBACK_RESPONSES[_fallback_idx % len(FALLBACK_RESPONSES)]
-        _fallback_idx += 1
-        return resp
+        return "Hello? Can you hear me? bad network..."
 
 # ═══════════════════════════════════════════════
 # Request/Response Models
@@ -443,6 +498,7 @@ class HoneypotRequest(BaseModel):
     sessionId: str = Field(default="")
     message: MessageInput
     conversationHistory: list[dict] = []
+    persona: dict = {}
     metadata: dict = {}
 
 # ═══════════════════════════════════════════════
@@ -466,6 +522,11 @@ def get_session(session_id: str) -> dict:
 
 @app.get("/")
 async def root():
+    # Serve the frontend chat UI
+    base = Path(__file__).resolve().parent.parent
+    html_path = base / "frontend" / "index.html"
+    if html_path.exists():
+        return FileResponse(html_path, media_type="text/html")
     return HTMLResponse("<h1>Agentic Honeypot</h1><p>POST /api/honeypot or /api/voice/detect</p>")
 
 
@@ -493,8 +554,11 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
 
     # 1. Detect scam (with session history for cumulative boosting)
     detection = detect_scam(message_text, session_history=history)
-    if detection.is_scam:
-        session["scam_confidence"] = max(session["scam_confidence"], detection.confidence)
+    # Always accumulate max confidence, even below threshold
+    session["scam_confidence"] = max(session["scam_confidence"], detection.confidence)
+    if detection.is_scam and session["scam_type"] == "unknown":
+        session["scam_type"] = detection.scam_type
+    elif detection.scam_type != "unknown" and session["scam_type"] == "unknown":
         session["scam_type"] = detection.scam_type
 
     # 2. Extract intelligence
@@ -505,6 +569,7 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
     reply = await generate_llm_response(
         scammer_message=message_text,
         conversation_history=history,
+        persona=req.persona,
         scam_type=session["scam_type"],
     )
 
@@ -540,6 +605,11 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
             "scam_confidence": session["scam_confidence"],
             "scam_type": session["scam_type"],
             "urgency_level": detection.urgency_level,
+        },
+        "intelligence": {
+            "extracted": new_intel,
+            "all_items": all_intel,
+            "total_items": len(all_intel),
         },
     }
 
@@ -612,6 +682,74 @@ async def voice_detect_endpoint(
         "analysis": {"indicators": indicators},
     }
 
+# ═══════════════════════════════════════════════
+# Text-to-Speech — ElevenLabs
+# ═══════════════════════════════════════════════
+
+# Use ONLY free pre-installed voices — no subscription needed, no 402 errors
+ELEVENLABS_VOICES = {
+    "Female": "21m00Tcm4TlvDq8ikWAM",  # Rachel (free, pre-installed)
+    "Male": "ErXwobaYiN019PkySvjV",    # Antoni (free, pre-installed)
+}
+
+class TTSRequest(BaseModel):
+    text: str
+    gender: str = "Male"
+
+@app.post("/api/tts")
+async def tts_endpoint(req: TTSRequest):
+    """Generate speech audio from text using ElevenLabs — free voices only for speed."""
+    if not ELEVENLABS_API_KEY:
+        return Response(content=b"", status_code=204,
+                        headers={"X-TTS-Status": "no-api-key"})
+
+    # Use free voice directly — no fallback chain needed, no wasted API calls
+    voice_id = ELEVENLABS_VOICES.get(req.gender, ELEVENLABS_VOICES["Male"])
+
+    tts_payload = json.dumps({
+        "text": req.text,
+        "model_id": "eleven_turbo_v2_5",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+        },
+    }).encode("utf-8")
+
+    headers_dict = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY,
+    }
+
+    url = f"{ELEVENLABS_API_URL}/text-to-speech/{voice_id}"
+    try:
+        http_req = urllib.request.Request(url, data=tts_payload, headers=headers_dict, method="POST")
+        status_code, audio_bytes = await asyncio.to_thread(_fetch_tts, http_req)
+        if audio_bytes:
+            return Response(
+                content=audio_bytes,
+                media_type="audio/mpeg",
+                headers={"X-TTS-Status": "ok", "X-Voice-Gender": req.gender},
+            )
+    except Exception as e:
+        print(f"[TTS ERROR] {e}")
+
+    return Response(content=b"", status_code=204,
+                    headers={"X-TTS-Status": "fallback-exhausted"})
+
+def _fetch_tts(req: urllib.request.Request) -> tuple[int, bytes]:
+    """Synchronous helper for ElevenLabs API call. Returns (status_code, audio_bytes)."""
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return (200, resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:200]
+        print(f"[TTS HTTP ERROR] {e.code}: {body}")
+        return (e.code, b"")
+    except Exception as e:
+        print(f"[TTS FETCH ERROR] {e}")
+        return (0, b"")
+
 
 # Also handle POST at root (in case GUVI tester sends to base URL)
 @app.post("/")
@@ -623,3 +761,20 @@ async def root_post(req: HoneypotRequest, x_api_key: str = Header(None)):
 @app.post("/api/conversation")
 async def conversation_compat(req: HoneypotRequest, x_api_key: str = Header(None)):
     return await honeypot_endpoint(req, x_api_key)
+
+
+# ═══════════════════════════════════════════════
+# Favicon & Browser Extension Noise Suppression
+# ═══════════════════════════════════════════════
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Return empty favicon to prevent 404."""
+    # 1x1 transparent PNG as favicon
+    return Response(content=b"", media_type="image/x-icon", status_code=204)
+
+@app.get("/hybridaction/{path:path}")
+async def suppress_extension_noise(path: str):
+    """Silently absorb browser extension requests (e.g. zybTracker)."""
+    return Response(content="", status_code=204)

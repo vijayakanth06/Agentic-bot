@@ -11,13 +11,15 @@ from app.config import settings
 
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1"
 
-# Default voice IDs from ElevenLabs (free tier)
-# "Rachel" - natural Indian-accented female voice
+# Default voice IDs from ElevenLabs (free tier — no subscription needed)
 DEFAULT_VOICES = {
-    "female_indian": "21m00Tcm4TlvDq8ikWAM",  # Rachel
-    "female_young": "EXAVITQu4vr4xnSDxMaL",   # Bella
-    "male_indian": "ErXwobaYiN019PkySvjV",     # Antoni
+    "female_indian": "21m00Tcm4TlvDq8ikWAM",  # Rachel (free)
+    "female_young": "EXAVITQu4vr4xnSDxMaL",   # Bella (free)
+    "male_indian": "ErXwobaYiN019PkySvjV",     # Antoni (free)
 }
+
+# Use turbo model for faster TTS responses
+TURBO_MODEL = "eleven_turbo_v2_5"
 
 
 async def text_to_speech(
@@ -39,8 +41,8 @@ async def text_to_speech(
         print("[TTS WARNING] No ElevenLabs API key — returning empty audio")
         return b""
 
-    voice = voice_id or settings.ELEVENLABS_VOICE_ID or DEFAULT_VOICES["female_indian"]
-    model = model_id or settings.ELEVENLABS_MODEL
+    voice = voice_id or DEFAULT_VOICES["female_indian"]
+    model = TURBO_MODEL  # Always use turbo for speed
 
     url = f"{ELEVENLABS_API_URL}/text-to-speech/{voice}"
 
@@ -50,8 +52,6 @@ async def text_to_speech(
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.75,
-            "style": 0.3,
-            "use_speaker_boost": True,
         },
     }
 
@@ -62,13 +62,16 @@ async def text_to_speech(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             return response.content
 
     except httpx.HTTPStatusError as e:
         print(f"[TTS ERROR] HTTP {e.response.status_code}: {e.response.text[:200]}")
+        return b""
+    except httpx.TimeoutException:
+        print("[TTS ERROR] Timeout — response took too long")
         return b""
     except Exception as e:
         print(f"[TTS ERROR] {e}")
@@ -87,8 +90,8 @@ async def text_to_speech_stream(
     if not settings.ELEVENLABS_API_KEY:
         return
 
-    voice = voice_id or settings.ELEVENLABS_VOICE_ID or DEFAULT_VOICES["female_indian"]
-    model = model_id or settings.ELEVENLABS_MODEL
+    voice = voice_id or DEFAULT_VOICES["female_indian"]
+    model = TURBO_MODEL  # Always use turbo for speed
 
     url = f"{ELEVENLABS_API_URL}/text-to-speech/{voice}/stream"
 
@@ -98,8 +101,6 @@ async def text_to_speech_stream(
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.75,
-            "style": 0.3,
-            "use_speaker_boost": True,
         },
     }
 
@@ -110,7 +111,7 @@ async def text_to_speech_stream(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as response:
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes(chunk_size=1024):
