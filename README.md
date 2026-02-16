@@ -9,7 +9,7 @@ An AI-powered scam detection honeypot that engages scammers using a realistic pe
 ```mermaid
 flowchart TD
     START(["Scammer sends message"]) --> API["POST /api/honeypot"]
-    API --> DETECT["Scam Detection Engine<br/>55+ regex patterns | Keyword scoring<br/>Behavioral analysis | History boosting"]
+    API --> DETECT["Scam Detection Engine<br/>Keyword scoring<br/>Behavioral analysis | History boosting"]
     DETECT --> INTEL["Intelligence Extraction<br/>UPI, Phone, Bank, URL, Name<br/>IFSC, Email, Employee ID..."]
     INTEL --> LLM["GROQ Llama 3.3 70B<br/>Persona-driven response<br/>Stalling + engagement tactics"]
     LLM --> RESP["JSON Response<br/>reply + scamDetected + extractedIntelligence"]
@@ -32,7 +32,6 @@ flowchart TD
 ## Features
 
 - **Realistic AI Persona** — Engages scammers naturally via GROQ Llama 3.3 70B with configurable name, age, occupation, location, bank, gender, and language
-- **55+ Scam Detection Patterns** — Covers urgency, authority, financial, verification, OTP fraud, lottery, job scam, investment, threat, phishing, refund scam, tech support, delivery/customs, insurance/pension, utility bill scams
 - **Hybrid Scoring Model** — Pattern matching (45%) + keyword scoring (25%) + behavioral analysis (15%) + session history (15%), with urgency and multi-category boosters
 - **Intelligence Extraction** — Automatically captures UPI IDs, phone numbers, bank accounts, URLs, names, IFSC codes, emails, employee IDs, reference IDs, policy IDs
 - **12 Scam Type Classifications** — `bank_fraud`, `upi_fraud`, `kyc_scam`, `otp_fraud`, `lottery_scam`, `job_scam`, `investment_scam`, `threat_scam`, `phishing`, `tech_support`, `generic`
