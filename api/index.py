@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 API_KEY = os.environ.get("API_KEY", "fae26946fc2015d9bd6f1ddbb447e2f7")
-LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
+LLM_MODEL = os.environ.get("LLM_MODEL", "openai/gpt-oss-120b")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 PERSONA_NAME = os.environ.get("PERSONA_NAME", "Tejash S")
 PERSONA_AGE = os.environ.get("PERSONA_AGE", "28")
