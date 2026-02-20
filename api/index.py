@@ -250,16 +250,19 @@ def _dedup_intel(items: list[dict], session_id: str) -> list[dict]:
 # ── Lightweight safety-net: catch obvious data the LLM might miss ──
 # NOTE: email MUST come BEFORE upi so we can exclude email matches from UPI
 _EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", re.I)
+# Phone: match +91 prefix with ANY 10 digits, OR standalone 6-9 starting 10 digits
+_PHONE_PATTERN = re.compile(r"\+91[\s-]?\d{10}|\b[6-9]\d{9}\b")
 _SAFETY_PATTERNS = [
-    ("phone", re.compile(r"(?:\+91[\s-]?)?\b[6-9]\d{9}\b", re.I)),
+    ("phone", _PHONE_PATTERN),
     ("email", _EMAIL_PATTERN),
     ("upi", re.compile(r"[a-zA-Z0-9._-]+@[a-zA-Z0-9_-]+\b(?!\.)", re.I)),
-    ("bank_account", re.compile(r"\b\d{9,18}\b")),
+    ("bank_account", re.compile(r"\b\d{11,18}\b")),
     ("url", re.compile(r"https?://[^\s<>\"']+")),
     ("ifsc", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")),
-    ("case_id", re.compile(r"\b(?:REF|CASE|FIR|TICKET|TKT|CBI|COMPLAINT|CR)[:\-#/\s]\s*[A-Z0-9][\w\-/]{2,}\b", re.I)),
-    ("policy_number", re.compile(r"\b(?:POL|POLICY|INS|PLAN|LIC)[:\-#/\s]\s*[A-Z0-9][\w\-]{2,}\b", re.I)),
-    ("order_number", re.compile(r"\b(?:ORD|ORDER|AWB|TXN|AMZ|TRACK|INV)[:\-#/\s]\s*[A-Z0-9][\w\-]{2,}\b", re.I)),
+    # IDs require at least one DIGIT in the value (prevents matching plain English words)
+    ("case_id", re.compile(r"\b(?:REF|CASE|FIR|TICKET|TKT|CBI|COMPLAINT|CR)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-/]{2,}\b", re.I)),
+    ("policy_number", re.compile(r"\b(?:POL|POLICY|INS|PLAN|LIC)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-]{2,}\b", re.I)),
+    ("order_number", re.compile(r"\b(?:ORD|ORDER|AWB|TXN|AMZ|TRACK|INV)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-]{2,}\b", re.I)),
 ]
 
 
@@ -270,6 +273,11 @@ def _safety_extract(message: str) -> list[dict]:
     email_matches = set()
     for m in _EMAIL_PATTERN.finditer(message):
         email_matches.add(m.group(0).strip().lower())
+    # Collect phone matches to exclude them from bank_account
+    phone_digits = set()
+    for m in _PHONE_PATTERN.finditer(message):
+        digits = re.sub(r'\D', '', m.group(0))
+        phone_digits.add(digits[-10:])  # last 10 digits
     
     for intel_type, pattern in _SAFETY_PATTERNS:
         for m in pattern.finditer(message):
@@ -278,9 +286,13 @@ def _safety_extract(message: str) -> list[dict]:
             if intel_type == "upi":
                 if "." in val.split("@")[-1]:
                     continue
-                # Also skip if this UPI match is a prefix of any email match
                 val_lower = val.lower()
                 if any(em.startswith(val_lower) for em in email_matches):
+                    continue
+            # Skip bank_account matches that are actually phone numbers
+            if intel_type == "bank_account":
+                digits = re.sub(r'\D', '', val)
+                if digits[-10:] in phone_digits:
                     continue
             items.append({"type": intel_type, "value": val, "confidence": 0.75})
     return items
