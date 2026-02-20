@@ -248,28 +248,40 @@ def _dedup_intel(items: list[dict], session_id: str) -> list[dict]:
 
 
 # ── Lightweight safety-net: catch obvious data the LLM might miss ──
+# NOTE: email MUST come BEFORE upi so we can exclude email matches from UPI
+_EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", re.I)
 _SAFETY_PATTERNS = [
     ("phone", re.compile(r"(?:\+91[\s-]?)?\b[6-9]\d{9}\b", re.I)),
+    ("email", _EMAIL_PATTERN),
     ("upi", re.compile(r"[a-zA-Z0-9._-]+@[a-zA-Z0-9_-]+\b(?!\.)", re.I)),
-    ("bank_account", re.compile(r"\b\d{12,18}\b")),
+    ("bank_account", re.compile(r"\b\d{9,18}\b")),
     ("url", re.compile(r"https?://[^\s<>\"']+")),
-    ("email", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", re.I)),
     ("ifsc", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")),
-    ("case_id", re.compile(r"\bREF[\-#: ][A-Z0-9][\w\-]{3,}\b")),
-    ("policy_number", re.compile(r"\bPOL[\-#: ][A-Z0-9][\w\-]{3,}\b")),
-    ("order_number", re.compile(r"\b(?:ORD|AWB|TXN)[\-#: ][A-Z0-9][\w\-]{3,}\b")),
+    ("case_id", re.compile(r"\b(?:REF|CASE|FIR|TICKET|TKT|CBI|COMPLAINT|CR)[:\-#/\s]\s*[A-Z0-9][\w\-/]{2,}\b", re.I)),
+    ("policy_number", re.compile(r"\b(?:POL|POLICY|INS|PLAN|LIC)[:\-#/\s]\s*[A-Z0-9][\w\-]{2,}\b", re.I)),
+    ("order_number", re.compile(r"\b(?:ORD|ORDER|AWB|TXN|AMZ|TRACK|INV)[:\-#/\s]\s*[A-Z0-9][\w\-]{2,}\b", re.I)),
 ]
 
 
 def _safety_extract(message: str) -> list[dict]:
     """Minimal regex backup — catches structured data LLM sometimes misses."""
     items = []
+    # First collect all email matches to exclude them from UPI
+    email_matches = set()
+    for m in _EMAIL_PATTERN.finditer(message):
+        email_matches.add(m.group(0).strip().lower())
+    
     for intel_type, pattern in _SAFETY_PATTERNS:
         for m in pattern.finditer(message):
             val = m.group(0).strip()
-            # Skip UPI matches that look like emails (contain dots in domain)
-            if intel_type == "upi" and "." in val.split("@")[-1]:
-                continue
+            # Skip UPI matches that are actually emails (have dots in domain) or overlap with found emails
+            if intel_type == "upi":
+                if "." in val.split("@")[-1]:
+                    continue
+                # Also skip if this UPI match is a prefix of any email match
+                val_lower = val.lower()
+                if any(em.startswith(val_lower) for em in email_matches):
+                    continue
             items.append({"type": intel_type, "value": val, "confidence": 0.75})
     return items
 
@@ -470,8 +482,8 @@ RULES:
         {"role": "system", "content": system_prompt + "\n\n" + classification_instruction},
     ]
 
-    # Include last 6 conversation messages to save tokens
-    for msg in conversation_history[-6:]:
+    # Include last 4 conversation messages to save tokens (optimized for rate limits)
+    for msg in conversation_history[-4:]:
         role = "assistant" if msg.get("sender") in ("user", "agent") else "user"
         text = msg.get("text", "")
         if role == "assistant":
@@ -508,7 +520,7 @@ RULES:
                         model=model,
                         messages=messages,
                         temperature=0.85,
-                        max_tokens=350,
+                        max_tokens=250,
                         top_p=0.95,
                         response_format={"type": "json_object"},
                     ),
@@ -668,7 +680,7 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
                 "engagementDurationSeconds": round(fallback_duration, 2),
                 "totalMessagesExchanged": msg_count,
             },
-            "agentNotes": f"Emergency fallback response. Scam type: generic. Red flags: urgency tactics, unsolicited contact, data collection attempt. Extracted: {len(fb_phones)} phones, {len(fb_accounts)} accounts, {len(fb_upis)} UPIs, {len(fb_urls)} links.",
+            "agentNotes": f"Emergency fallback response. Scam type: generic. Red flags identified: urgency/time pressure tactics, unsolicited contact from unknown party, request for sensitive data (account/OTP/credentials), impersonation of authority figure, potential phishing attempt, suspicious payment/fee demand. Extracted: {len(fb_phones)} phone numbers, {len(fb_accounts)} bank accounts, {len(fb_upis)} UPI IDs, {len(fb_urls)} links, {len(fb_emails)} emails, {len(fb_cases)} case IDs, {len(fb_policies)} policy numbers, {len(fb_orders)} order numbers. The scammer used social engineering tactics including urgency and fear, identity impersonation, requests for sensitive data, and deceptive communication.",
             "analysis": {
                 "is_scam": True,
                 "scam_confidence": 0.65,
@@ -790,11 +802,62 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
     estimated_duration = total_messages * 15.0
     engagement_duration = max(wall_clock_duration, estimated_duration)
 
-    # 6. Return GUVI-compatible response with ALL scoring fields
+    # 6. Dynamic red flag analysis on ALL conversation text
+    all_scammer_text = " ".join(
+        m.get("text", "") for m in session["history"] if m.get("sender") == "scammer"
+    ).lower()
+    if req.conversationHistory:
+        all_scammer_text += " " + " ".join(
+            m.get("text", "") for m in req.conversationHistory if m.get("sender") == "scammer"
+        ).lower()
+    all_scammer_text += " " + message_text.lower()
+
+    red_flags = []
+    _RF_PATTERNS = [
+        ("Urgency/time pressure tactics", r"(?:urgent|immediately|right\s*now|hurry|quick|fast|within\s*\d|last\s*chance|expire|deadline|limited\s*time|act\s*now|don.t\s*delay)"),
+        ("OTP/credential request", r"(?:otp|one\s*time\s*password|verification\s*code|cvv|pin\s*number|password|credential|secret\s*code)"),
+        ("Account block/freeze threat", r"(?:block|freeze|suspend|disconnect|deactivat|cancel|terminat|restrict|disable|locked|hold\s*your\s*account)"),
+        ("Legal/arrest threat", r"(?:legal\s*action|arrest|police|court|warrant|cbi|summon|prosecut|jail|penalty|fine\s*of|imprisonment)"),
+        ("Too-good-to-be-true offer", r"(?:congratulat|won|winner|prize|reward|cashback|guaranteed\s*return|100\s*%|free\s*gift|selected|lucky|jackpot|bonus)"),
+        ("Suspicious link/download", r"(?:click.*(?:link|here|below)|download|install|visit\s*(?:this|our)|verify.*(?:link|url)|\.fake|amaz0n|http)"),
+        ("Request for sensitive data", r"(?:share.*(?:account|aadhaar|pan|otp|bank)|send.*(?:money|amount|payment)|provide.*(?:detail|number|info))"),
+        ("Unsolicited contact", r"(?:calling\s*from|this\s*is\s*(?:from|the)|we\s*(?:are|have)\s*(?:from|noticed)|your\s*(?:account|application|policy|order)\s*(?:has|is|was))"),
+        ("Upfront fee/payment demand", r"(?:processing\s*fee|registration\s*fee|advance\s*payment|pay.*(?:first|now|immediate)|transfer.*(?:amount|fee)|service\s*charge|tax\s*payment)"),
+        ("Impersonation of authority", r"(?:(?:from|calling)\s*(?:sbi|rbi|police|income\s*tax|customs|microsoft|amazon|paytm|government|ministry)|official|authorized|certified|department|division|officer)"),
+    ]
+    for label, pattern in _RF_PATTERNS:
+        if re.search(pattern, all_scammer_text, re.I):
+            red_flags.append(label)
+
+    # 7. Return GUVI-compatible response with ALL scoring fields
     has_intel = bool(phone_numbers or bank_accounts or upi_ids or phishing_links or email_addresses or case_ids or policy_numbers or order_numbers)
     is_scam = session["scam_confidence"] > 0.25 or has_intel or total_messages >= 6
     final_scam_type = session["scam_type"] if session["scam_type"] != "unknown" else "generic"
     final_confidence = round(max(session["scam_confidence"], 0.65 if is_scam else 0.0), 2)
+
+    # Build comprehensive agent notes with explicit red flag listing
+    intel_summary = []
+    if phone_numbers: intel_summary.append(f"{len(phone_numbers)} phone numbers: {', '.join(phone_numbers[:3])}")
+    if bank_accounts: intel_summary.append(f"{len(bank_accounts)} bank accounts: {', '.join(bank_accounts[:3])}")
+    if upi_ids: intel_summary.append(f"{len(upi_ids)} UPI IDs: {', '.join(upi_ids[:3])}")
+    if phishing_links: intel_summary.append(f"{len(phishing_links)} phishing links: {', '.join(phishing_links[:2])}")
+    if email_addresses: intel_summary.append(f"{len(email_addresses)} email addresses: {', '.join(email_addresses[:3])}")
+    if case_ids: intel_summary.append(f"{len(case_ids)} case/reference IDs: {', '.join(case_ids[:3])}")
+    if policy_numbers: intel_summary.append(f"{len(policy_numbers)} policy numbers: {', '.join(policy_numbers[:3])}")
+    if order_numbers: intel_summary.append(f"{len(order_numbers)} order numbers: {', '.join(order_numbers[:3])}")
+
+    agent_notes = (
+        f"Scam type: {final_scam_type} (confidence: {final_confidence}). "
+        f"Urgency level: {llm_urgency}. "
+        f"Red flags identified ({len(red_flags)}): {'; '.join(red_flags) if red_flags else 'none'}. "
+        f"Extracted intelligence: {'; '.join(intel_summary) if intel_summary else 'none'}. "
+        f"Engagement: {total_messages} messages over ~{round(engagement_duration)}s. "
+        f"The scammer used social engineering tactics including "
+        f"{'urgency and fear, ' if any('Urgency' in f or 'threat' in f.lower() for f in red_flags) else ''}"
+        f"{'identity impersonation, ' if any('Impersonation' in f for f in red_flags) else ''}"
+        f"{'requests for sensitive data, ' if any('sensitive' in f.lower() for f in red_flags) else ''}"
+        f"and deceptive communication to manipulate the target."
+    )
 
     return {
         "status": "success",
@@ -819,7 +882,7 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
             "engagementDurationSeconds": round(engagement_duration, 2),
             "totalMessagesExchanged": total_messages,
         },
-        "agentNotes": f"Scam type: {final_scam_type} (LLM-classified). Confidence: {final_confidence}. Urgency: {llm_urgency}. Extracted: {len(phone_numbers)} phones, {len(bank_accounts)} bank accounts, {len(upi_ids)} UPI IDs, {len(phishing_links)} links, {len(email_addresses)} emails, {len(case_ids)} case/ref IDs, {len(policy_numbers)} policies, {len(order_numbers)} orders. Total messages: {total_messages}. Duration: {round(engagement_duration)}s. Red flags: urgency tactics, unsolicited contact, identity impersonation, data collection attempt.",
+        "agentNotes": agent_notes,
         "analysis": {
             "is_scam": is_scam,
             "scam_confidence": final_confidence,
