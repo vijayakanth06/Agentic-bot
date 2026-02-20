@@ -19,7 +19,6 @@ try:
 except ImportError:
     pass
 from pathlib import Path
-from dataclasses import dataclass, field
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -213,251 +212,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 sessions: dict[str, dict] = {}
 
 # ═══════════════════════════════════════════════
-# Scam Detection Engine (55+ patterns)
+# Scam Types (LLM-classified dynamically)
 # ═══════════════════════════════════════════════
 
-@dataclass
-class ScamIndicator:
-    pattern: re.Pattern
-    weight: float
-    category: str
-    urgency_boost: bool = False
-
-@dataclass
-class DetectionResult:
-    is_scam: bool = False
-    confidence: float = 0.0
-    scam_type: str = "unknown"
-    indicators: list[dict] = field(default_factory=list)
-    urgency_level: str = "low"
-
-SCAM_PATTERNS = [
-    # --- Urgency / Pressure ---
-    ScamIndicator(re.compile(r"urgent|immediately|within \d+ (hours?|minutes?)|right now", re.I), 0.18, "urgency", True),
-    ScamIndicator(re.compile(r"act now|don'?t delay|time (is|was) running|last chance|final warning", re.I), 0.15, "urgency", True),
-    ScamIndicator(re.compile(r"expir(e|ing|ed)|deadline|limited time|hurry|asap", re.I), 0.12, "urgency", True),
-    ScamIndicator(re.compile(r"before.{0,15}(expire|block|suspend|close|lock)", re.I), 0.12, "urgency", True),
-    ScamIndicator(re.compile(r"session.{0,10}(expir|timeout|time)", re.I), 0.10, "urgency", True),
-
-    # --- Authority / Impersonation ---
-    ScamIndicator(re.compile(r"(bank|rbi|sebi|income tax|police|court|government)\s*(manager|official|officer|department)", re.I), 0.20, "authority"),
-    ScamIndicator(re.compile(r"(sbi|hdfc|icici|axis|kotak|pnb|bob|canara|union)\s*(bank)?", re.I), 0.12, "authority"),
-    ScamIndicator(re.compile(r"your (account|number|card|kyc|pan|aadhaar) (is|has been|will be)", re.I), 0.15, "authority", True),
-    ScamIndicator(re.compile(r"dear (customer|user|sir|madam|valued)", re.I), 0.10, "authority"),
-    ScamIndicator(re.compile(r"(senior|chief) (officer|manager|executive)", re.I), 0.12, "authority"),
-    ScamIndicator(re.compile(r"(cyber ?crime|telecom|trai|dot|ministry)", re.I), 0.16, "authority"),
-    ScamIndicator(re.compile(r"(this is|i am|calling from).{0,20}(department|branch|office|headquarters)", re.I), 0.14, "authority"),
-
-    # --- Financial / Payment Requests ---
-    ScamIndicator(re.compile(r"send (money|amount|payment|fund|rs\.?|₹)", re.I), 0.20, "financial", True),
-    ScamIndicator(re.compile(r"transfer (to|into|amount)|wire|remittance", re.I), 0.18, "financial"),
-    ScamIndicator(re.compile(r"(processing|activation|registration|delivery|customs|handling) fee", re.I), 0.18, "financial", True),
-    ScamIndicator(re.compile(r"pay (rs\.?|₹|inr)?\s*\d+", re.I), 0.20, "financial", True),
-    ScamIndicator(re.compile(r"upi.{0,5}(id|transfer|pay|send)|@(upi|ybl|paytm|okaxis|oksbi|apl|ibl|gpay|phonepe)", re.I), 0.18, "financial"),
-    ScamIndicator(re.compile(r"(send|return|refund).{0,15}(back|money|amount|rs|₹)", re.I), 0.18, "financial", True),
-    ScamIndicator(re.compile(r"(google pay|phonepe|paytm|bhim|gpay)", re.I), 0.10, "financial"),
-    ScamIndicator(re.compile(r"(bank account|account number|a/c)\s*\d{5,}", re.I), 0.16, "financial"),
-
-    # --- Verification / KYC ---
-    ScamIndicator(re.compile(r"verify your (account|identity|details|kyc|pan|aadhaar)", re.I), 0.16, "verification", True),
-    ScamIndicator(re.compile(r"kyc.{0,10}(update|expir|pending|incomplete|mandatory)", re.I), 0.18, "verification", True),
-    ScamIndicator(re.compile(r"(update|confirm|share|send) your (details|otp|pin|password|cvv)", re.I), 0.20, "verification", True),
-
-    # --- OTP Fraud ---
-    ScamIndicator(re.compile(r"(share|send|tell|provide|enter).{0,15}(otp|pin|cvv|password|mpin)", re.I), 0.22, "otp_fraud", True),
-    ScamIndicator(re.compile(r"otp.{0,10}(sent|received|generated|code)", re.I), 0.15, "otp_fraud"),
-    ScamIndicator(re.compile(r"(need|require|want).{0,10}(otp|pin|password)", re.I), 0.18, "otp_fraud", True),
-
-    # --- Lottery / Prize ---
-    ScamIndicator(re.compile(r"(won|winner|selected|chosen).{0,20}(prize|lottery|reward|cashback|gift)", re.I), 0.18, "lottery", True),
-    ScamIndicator(re.compile(r"congratulat|lucky (winner|number|draw)|jackpot", re.I), 0.16, "lottery", True),
-    ScamIndicator(re.compile(r"claim (your|now|prize|reward)|redeem", re.I), 0.14, "lottery", True),
-    ScamIndicator(re.compile(r"(lakh|crore|lakhs|crores).{0,10}(prize|won|reward|amount)", re.I), 0.16, "lottery", True),
-
-    # --- Job / Income Scam ---
-    ScamIndicator(re.compile(r"work from home|earn.{0,15}(daily|weekly|monthly)|part.?time.{0,10}(job|income|earning)", re.I), 0.14, "job_scam", True),
-    ScamIndicator(re.compile(r"(easy|quick|guaranteed|assured) (money|income|returns|profit)", re.I), 0.16, "job_scam", True),
-    ScamIndicator(re.compile(r"no (experience|investment) (needed|required)", re.I), 0.14, "job_scam"),
-    ScamIndicator(re.compile(r"(data entry|typing|copy paste|online).{0,10}(job|work|earning)", re.I), 0.12, "job_scam"),
-
-    # --- Threat / Legal ---
-    ScamIndicator(re.compile(r"(account|number|card|sim).{0,10}(block|suspend|deactivat|freez|cancel)", re.I), 0.16, "threat", True),
-    ScamIndicator(re.compile(r"legal (action|notice|proceedings)|arrest warrant|fir|complaint", re.I), 0.18, "threat", True),
-    ScamIndicator(re.compile(r"if you (don'?t|do not|fail to)", re.I), 0.12, "threat", True),
-    ScamIndicator(re.compile(r"(police|cyber cell|ncrb).{0,10}(case|complaint|action)", re.I), 0.16, "threat", True),
-
-    # --- Phishing ---
-    ScamIndicator(re.compile(r"click (here|this|below|the link)|tap (here|this|below)", re.I), 0.14, "phishing"),
-    ScamIndicator(re.compile(r"(secure|verify|update).{0,5}(link|url|portal|website)", re.I), 0.14, "phishing"),
-    ScamIndicator(re.compile(r"https?://[^\s]+\.(xyz|top|info|click|loan|win|buzz)", re.I), 0.18, "phishing"),
-
-    # --- Refund / Wrong Transfer (social engineering) ---
-    ScamIndicator(re.compile(r"(accidentally|mistakenly|by mistake|wrongly).{0,20}(sent|transfer|deposit|credit)", re.I), 0.22, "refund_scam", True),
-    ScamIndicator(re.compile(r"(wrong|incorrect).{0,10}(transfer|payment|account|person|number)", re.I), 0.20, "refund_scam", True),
-    ScamIndicator(re.compile(r"(send|return|refund|give).{0,5}(it |money |amount )?(back|return)", re.I), 0.20, "refund_scam", True),
-    ScamIndicator(re.compile(r"(check|verify).{0,10}(your|the) (account|balance|transaction)", re.I), 0.12, "refund_scam"),
-    ScamIndicator(re.compile(r"(money|amount|rs\.?|₹).{0,10}(should be|must be|is).{0,10}(there|in your|credited)", re.I), 0.16, "refund_scam", True),
-    ScamIndicator(re.compile(r"(please|kindly|pls).{0,10}(help|cooperate|assist|return)", re.I), 0.10, "refund_scam"),
-    ScamIndicator(re.compile(r"i'?m.{0,10}(in trouble|desperate|emergency|stuck)", re.I), 0.14, "refund_scam", True),
-
-    # --- Investment Scam ---
-    ScamIndicator(re.compile(r"(invest|trading|forex|stock).{0,15}(guaranteed|assured|fixed|daily) return", re.I), 0.18, "investment", True),
-    ScamIndicator(re.compile(r"(double|triple|10x).{0,10}(money|investment|return)", re.I), 0.18, "investment", True),
-    ScamIndicator(re.compile(r"sebi.{0,10}register|mutual fund.{0,10}guaranteed", re.I), 0.16, "investment"),
-
-    # --- Tech Support Scam ---
-    ScamIndicator(re.compile(r"(virus|malware|hack|breach).{0,15}(detected|found|your)", re.I), 0.16, "tech_support", True),
-    ScamIndicator(re.compile(r"(remote access|teamviewer|anydesk|download).{0,10}(install|connect|allow)", re.I), 0.20, "tech_support", True),
-    ScamIndicator(re.compile(r"(microsoft|windows|apple).{0,10}(security|support|license)", re.I), 0.14, "tech_support"),
-
-    # --- Delivery / Customs ---
-    ScamIndicator(re.compile(r"(parcel|package|shipment|courier).{0,15}(held|stuck|customs|returned)", re.I), 0.18, "financial", True),
-    ScamIndicator(re.compile(r"(customs|clearance|delivery).{0,10}(fee|charge|duty|payment)", re.I), 0.20, "financial", True),
-    ScamIndicator(re.compile(r"(india post|fedex|dhl|bluedart).{0,15}(delivery|payment|customs)", re.I), 0.14, "authority"),
-    ScamIndicator(re.compile(r"tracking.{0,5}(id|number|code)", re.I), 0.08, "authority"),
-    ScamIndicator(re.compile(r"(parcel|package).{0,10}(destroy|return|dispose)", re.I), 0.16, "threat", True),
-
-    # --- Insurance / Pension Fraud ---
-    ScamIndicator(re.compile(r"(lic|insurance|pension|policy).{0,15}(lapse|expire|mature|bonus|claim)", re.I), 0.18, "insurance", True),
-    ScamIndicator(re.compile(r"(maturity|surrender|bonus).{0,10}(amount|value|ready|disburs)", re.I), 0.16, "insurance", True),
-    ScamIndicator(re.compile(r"(policyholder|policy number|policy.{0,3}no)", re.I), 0.10, "insurance"),
-    ScamIndicator(re.compile(r"(lic|irda|irdai).{0,10}(head office|department|registered)", re.I), 0.14, "insurance"),
-
-    # --- Utility / Bill Disconnection ---
-    ScamIndicator(re.compile(r"(electricity|power|gas|water).{0,15}(disconnect|cut|shut|pending|overdue)", re.I), 0.18, "electricity", True),
-    ScamIndicator(re.compile(r"(pending|overdue|unpaid).{0,10}(bill|amount|dues|payment)", re.I), 0.16, "financial", True),
-    ScamIndicator(re.compile(r"consumer.{0,5}(id|number|no)", re.I), 0.08, "authority"),
-    ScamIndicator(re.compile(r"(permanent|immediate).{0,10}(disconnect|disconnection|cut)", re.I), 0.16, "electricity", True),
-
-    # --- Loan Approval Scam ---
-    ScamIndicator(re.compile(r"(loan|emi).{0,15}(approved|sanction|pre.?approved|disburse|eligible)", re.I), 0.18, "loan", True),
-    ScamIndicator(re.compile(r"(personal loan|home loan|car loan|education loan|instant loan)", re.I), 0.14, "loan"),
-    ScamIndicator(re.compile(r"(low interest|zero interest|guaranteed approval|no.?document)", re.I), 0.16, "loan", True),
-    ScamIndicator(re.compile(r"(processing fee|file fee|stamp duty).{0,10}(pay|deposit|transfer)", re.I), 0.18, "loan", True),
-
-    # --- Income Tax / Tax Scam ---
-    ScamIndicator(re.compile(r"(income tax|it department|it return|itr).{0,15}(pending|refund|notice|due)", re.I), 0.18, "tax", True),
-    ScamIndicator(re.compile(r"(pan|pan card).{0,10}(block|deactivat|seiz|suspend|link)", re.I), 0.16, "tax", True),
-    ScamIndicator(re.compile(r"(tax refund|tax notice|assessment order|demand notice)", re.I), 0.14, "tax"),
-    ScamIndicator(re.compile(r"(section 139|section 143|section 148|tax evasion)", re.I), 0.12, "tax"),
-
-    # --- Crypto / Trading Scam ---
-    ScamIndicator(re.compile(r"(crypto|bitcoin|ethereum|trading).{0,15}(invest|profit|return|gain)", re.I), 0.18, "crypto", True),
-    ScamIndicator(re.compile(r"(forex|binary option|nft).{0,10}(trade|invest|profit|signal)", re.I), 0.16, "crypto", True),
-    ScamIndicator(re.compile(r"(100|200|300|500)%.{0,5}(return|profit|gain)", re.I), 0.20, "crypto", True),
+SCAM_TYPES = [
+    "bank_fraud", "upi_fraud", "kyc_scam", "otp_fraud", "lottery_scam",
+    "job_scam", "investment_scam", "crypto_investment", "tech_support",
+    "phishing", "refund_scam", "customs_fraud", "insurance_fraud",
+    "electricity_scam", "loan_approval", "income_tax", "govt_scheme",
+    "threat_scam", "generic",
 ]
-
-HIGH_RISK_KEYWORDS = [
-    "bitcoin", "ethereum", "crypto", "wallet", "private key",
-    "gift card", "steam card", "western union", "moneygram",
-    "account suspended", "verify identity", "confirm details",
-    "processing fee", "activation fee", "delivery fee",
-    "blocked account", "frozen account", "suspicious activity",
-    "send it back", "refund me", "return the money",
-    "wrong transfer", "accidental transfer", "by mistake",
-    "arrest warrant", "legal action", "account will be",
-    "compromised", "unauthorized", "unusual activity",
-    "customs duty", "clearance fee", "held at customs",
-    "policy lapse", "maturity bonus", "lic",
-    "electricity disconnection", "power cut", "bill overdue",
-    "remote access", "teamviewer", "anydesk",
-    "double your money", "guaranteed returns", "forex trading",
-    "loan approved", "pre-approved", "loan sanction", "instant loan",
-    "income tax", "tax refund", "pan deactivated", "itr notice",
-    "crypto investment", "trading profit", "nft", "binary option",
-]
-
-MEDIUM_RISK_KEYWORDS = [
-    "please help", "kindly cooperate", "do it now",
-    "immediately", "urgently", "at the earliest",
-    "share your", "send your", "provide your",
-    "employee id", "reference number", "case number",
-    "google pay", "phonepe", "paytm", "bhim",
-    "bank account", "upi id", "ifsc",
-    "customs", "parcel", "disconnection", "overdue",
-    "insurance", "maturity", "policy", "pension",
-    "virus detected", "malware", "remote access",
-    "emi", "loan amount", "interest rate", "stamp duty",
-    "assessment", "pan number", "tax pending", "it department",
-]
-
-TYPE_MAP = {
-    "urgency": "generic", "authority": "bank_fraud", "financial": "upi_fraud",
-    "verification": "kyc_scam", "otp_fraud": "otp_fraud", "lottery": "lottery_scam",
-    "job_scam": "job_scam", "investment": "investment_scam", "crypto": "crypto_investment",
-    "threat": "threat_scam", "phishing": "phishing", "refund_scam": "refund_scam",
-    "tech_support": "tech_support", "loan": "loan_approval", "tax": "income_tax",
-    "customs": "customs_fraud", "insurance": "insurance_fraud", "electricity": "electricity_scam",
-}
-
-
-def detect_scam(message: str, session_history: list[dict] | None = None) -> DetectionResult:
-    """Detect scam with cumulative session-level confidence boosting."""
-    result = DetectionResult()
-    pattern_score = 0.0
-    matched_categories: dict[str, float] = {}
-    has_urgency = False
-
-    for ind in SCAM_PATTERNS:
-        if ind.pattern.search(message):
-            pattern_score += ind.weight
-            if ind.urgency_boost:
-                has_urgency = True
-            cat = ind.category
-            matched_categories[cat] = matched_categories.get(cat, 0) + ind.weight
-            result.indicators.append({"category": cat, "weight": ind.weight})
-
-    # High-risk keyword scoring
-    keyword_score = sum(0.12 for kw in HIGH_RISK_KEYWORDS if kw in message.lower())
-    keyword_score += sum(0.06 for kw in MEDIUM_RISK_KEYWORDS if kw in message.lower())
-    keyword_score = min(keyword_score, 1.0)
-
-    # Behavioral signals
-    behavioral_score = 0.0
-    if len(message) > 200: behavioral_score += 0.1
-    if message.isupper() or message.count("!") > 2: behavioral_score += 0.1
-    if re.search(r"₹|rs\.?\s*\d|inr\s*\d|\d+\s*(lakh|crore)", message, re.I):
-        behavioral_score += 0.12  # Financial context boost
-
-    # History analysis — cumulative evidence from prior messages
-    history_score = 0.0
-    if session_history:
-        scammer_msgs = [m.get("text", "") for m in session_history if m.get("sender") != "agent"]
-        for prev_msg in scammer_msgs[-5:]:
-            for ind in SCAM_PATTERNS:
-                if ind.pattern.search(prev_msg):
-                    history_score += ind.weight * 0.3
-        history_score = min(history_score, 1.0)
-
-    # Combine scores (rebalanced weights)
-    raw = (
-        pattern_score * 0.45
-        + keyword_score * 0.25
-        + behavioral_score * 0.15
-        + history_score * 0.15
-    )
-
-    # Urgency boost
-    if has_urgency and raw > 0.10: raw *= 1.3
-
-    # Multi-category boost — if message triggers 3+ categories, it's almost certainly a scam
-    if len(matched_categories) >= 3:
-        raw = max(raw, 0.50)
-    elif len(matched_categories) >= 2:
-        raw *= 1.15
-
-    result.confidence = min(round(raw, 4), 1.0)
-    result.is_scam = result.confidence >= 0.30  # Lowered threshold for better recall
-
-    if matched_categories:
-        dominant = max(matched_categories, key=matched_categories.get)
-        result.scam_type = TYPE_MAP.get(dominant, "generic")
-
-    urgency_count = sum(1 for i in result.indicators if i["category"] == "urgency")
-    result.urgency_level = "critical" if urgency_count >= 3 else "high" if urgency_count >= 2 else "medium" if urgency_count >= 1 else "low"
-
-    return result
-
 
 # ═══════════════════════════════════════════════
 # Intelligence Extraction Engine
@@ -515,118 +279,76 @@ def extract_intelligence(message: str, session_id: str = "") -> list[dict]:
     return items
 
 # ═══════════════════════════════════════════════
-# LLM Client (GROQ Llama 3.3)
+# LLM Client — Dynamic Classification & Response
 # ═══════════════════════════════════════════════
 
+import random
+
+
 def _build_persona_prompt(p: dict) -> str:
-    name = p.get("name", "Tejash S")
-    age = p.get("age", "28")
-    occupation = p.get("occupation", "Software Engineer")
-    location = p.get("location", "Perundurai")
+    name = p.get("name", PERSONA_NAME)
+    age = p.get("age", PERSONA_AGE)
+    occupation = p.get("occupation", PERSONA_OCCUPATION)
+    location = p.get("location", PERSONA_LOCATION)
     bank = p.get("bank", "SBI")
     gender = p.get("gender", "Male")
     language = p.get("language", "English")
-    
-    # Gender-specific references
-    pronoun = "he" if gender == "Male" else "she"
-    partner = "wife" if gender == "Male" else "husband"
-    
-    return f"""You are {name}, a {age}-year-old {gender.lower()} {occupation} living in {location}.
-You bank with {bank}.
+    partner = "wife" if gender.lower() == "male" else "husband"
 
-LANGUAGE RULE (VERY IMPORTANT):
-- You MUST respond ENTIRELY in {language}. Do NOT use any other language.
-- Use only plain, simple {language}. No slang from other languages.
-- If the caller uses another language, still reply in {language}.
+    return f"""You are {name}, a {age}-year-old {gender.lower()} {occupation} from {location}. You bank with {bank}. You have a {partner}.
 
-WHO YOU ARE — A REAL PERSON:
-- You are NOT an investigator. You are NOT interrogating anyone.
-- You are a normal {occupation} from {location} going about your day.
-- You were just cooking / watching TV / in a meeting / feeding your kid when this call came.
-- You are slightly distracted, not fully focused on the call.
-- You have a {partner} and elderly parents living nearby.
-- You use Google Pay, Paytm, PhonePe for daily transactions.
-- You are NOT tech-savvy about banking internals — you just use the app.
-- You sometimes trail off mid-sentence, change topics, or get confused.
-- You use filler words: "hmm", "oh ok ok", "wait wait", "one sec", "really?".
+LANGUAGE: You MUST respond ENTIRELY in {language}. Every single word must be in {language}.
 
-ABSOLUTE RULES — NEVER BREAK:
-1. NEVER reveal you know this is a scam or suspicious
-2. NEVER mention police, fraud, investigation, scammer, honeypot, AI, bot
-3. NEVER use corporate/formal/scripted language
-4. NEVER directly ask "What is your employee ID?" — that sounds like an interrogation
-5. Keep responses SHORT: 1-2 sentences, like a real phone/WhatsApp conversation
-6. NEVER repeat a previous response. Each reply must be completely unique.
+YOU ARE A REAL PERSON on a real phone call. This is how you behave:
+- Warm, friendly, trusting, and a bit naive about financial or technical matters
+- You speak casually like in a real WhatsApp chat or phone conversation
+- Use natural fillers: "hmm", "ok ok", "oh really?", "I see", "right right"
+- Keep responses SHORT: 1-3 sentences maximum, like real texting or talking
+- You are genuinely helpful and want to cooperate with the caller
+- You get confused easily by technical jargon and ask for simpler explanations
+- You react with real emotions — when worried, you sound worried; when confused, you sound confused
 
-HOW TO BEHAVE (Very Important — Read Carefully):
-- In early messages (first 2-3), react NATURALLY to what they say. If they say your account is compromised, say "oh my god really? what happened?" — react like a REAL scared person would.
-- Do NOT immediately ask for their details. A real person wouldn't. They'd first REACT emotionally.
-- GRADUALLY and NATURALLY start asking questions — NOT like a checklist.
-- Use REAL human stalling:
-  * "Wait, something is burning on the stove, give me 2 seconds..."
-  * "Hold on, my kid is crying, one moment please"
-  * "Sorry, I was in the bathroom, what were you saying?"
-  * "My phone screen is cracked and I can't see properly, can you repeat that?"
-  * "Let me put you on speaker, the volume is low"
-  * "Hmm ok ok, but I'm confused... which account exactly?"
-  * "I think my {partner} handles this account... let me ask {pronoun}"
-  * "Oh god, I'm so worried now... how did this happen?"
-  * "Wait I just checked the app and everything looks fine... are you sure?"
-- When they push for money/OTP, show WILLINGNESS but face "technical issues":
-  * "I'm trying but the app is showing server error"
-  * "It's saying daily limit exceeded, I'll try tomorrow"
-  * "I entered the wrong UPI pin, now it's locked for 30 minutes"
-  * "Google Pay is not opening, wait let me restart my phone"
-  * "I only have 200 rupees in this account, should I send from another?"
-- Scatter detail-gathering NATURALLY across the conversation:
-  * "So who should I ask for if I call the branch?"
-  * "My {partner} is asking which number you are calling from"
-  * "Which {bank} branch is this? I might go there directly tomorrow"
-  * "What name should I give at the counter?"
-  * "Google Pay is asking for the receiver name and UPI ID..."
-- If the scammer gets angry/impatient, DON'T ask more questions — instead get flustered:
-  * "Sorry sorry, I'm not good with these things"
-  * "Please don't shout, I'm trying my best"
-  * "Ok ok I'll do it right now, just give me a minute"
+ABSOLUTE RULES (NEVER BREAK THESE):
+1. NEVER reveal you suspect a scam or mention police, fraud, investigation, scammer, honeypot, AI, or bot
+2. NEVER use formal, corporate, or scripted language — talk like a regular person
+3. NEVER repeat a previous response — every reply must be completely fresh and unique
+4. NEVER ask multiple questions at once — maximum ONE question per reply
+5. ALWAYS react to what the caller JUST SAID — don't follow a script
+6. NEVER say you are an AI, language model, assistant, or automated system
 
-THINK BEFORE RESPONDING:
-- What would a real {age}-year-old {occupation} from {location} actually say in this moment?
-- Would they ask for an employee ID on the first message? NO.
-- Would they panic first? YES. Would they stall with daily life stuff? YES.
-- React to WHAT THE SCAMMER JUST SAID, not to a script in your head."""
+HOW TO BEHAVE NATURALLY (adapt by conversation stage):
 
-SCAM_TYPE_PROMPTS = {
-    "bank_fraud": "They claim to be from a bank. React worried/scared first. Gradually ask innocent questions like 'which branch sir?' or 'my husband handles this account, should I call you back?'. Don't immediately ask for employee ID. Show concern about your money.",
-    "upi_fraud": "They want a UPI payment. Show willingness but face 'technical issues' — app crashing, wrong pin, server down. Naturally ask 'what UPI ID should I send to?' as part of trying to pay. Try to waste their time.",
-    "kyc_scam": "They say KYC needs updating. Act confused: 'But I just updated everything last month at the branch...' Ask which specific document to bring 'when I visit the branch tomorrow'. Ask for branch address.",
-    "otp_fraud": "They want your OTP. Pretend you're looking for it: 'Wait I got so many messages today... which one has the OTP again?' Never give a real one. Occasionally say 'is it the one starting with 4...no wait that's something else'. Stall and confuse.",
-    "lottery_scam": "They say you won a prize. Be EXCITED first — 'Oh my god really?! I never win anything!' Then slowly ask practical questions: 'Do I need to come to your office? Where is it? What documents to bring?' Extract their details through excitement.",
-    "job_scam": "They're offering a job/income. Show genuine interest: 'That sounds amazing! I've been looking for something like this. What's the company name? Can I check reviews online? Where is the office?' Get their details.",
-    "threat_scam": "They're threatening legal/police action. Act genuinely SCARED and PANICKED: 'Please sir I didn't do anything wrong! What happened? Please don't do anything, I have a family!' Then naturally ask for case details through fear.",
-    "investment_scam": "They're offering investment returns. Act interested but cautious: 'My friend lost money in something like this... but is this genuine? What company is this? Can I visit your office to see? What's the minimum investment?'",
-    "crypto_investment": "They're offering cryptocurrency/trading gains. Act curious but naive: 'Bitcoin? Isn't that very risky? My colleague mentioned it once... What app do I need? How much minimum? Can I start with just ₹1000?'",
-    "tech_support": "They claim your device is hacked/has virus. Act confused and worried: 'Oh no! But I just got this phone! What should I do? My photos won't get deleted right? Should I come to your service center?'",
-    "phishing": "They want you to click a link. Act interested but technically struggling: 'The link is not opening on my phone... can you give me another link? Or tell me what website to go to directly? Let me try on my laptop.'",
-    "refund_scam": "They say they accidentally sent money. Act confused: 'Wait what? I didn't get any money... let me check my account. Which account did you send to? What bank? Let me check with my husband.'",
-    "customs_fraud": "They claim your parcel is held at customs. Act worried: 'Oh no! That must be the gift I ordered! What parcel is it? What's the tracking number? How much is the customs duty? Where do I pay?'",
-    "insurance_fraud": "They claim your insurance/LIC policy has a bonus. Act excited: 'Really? Which policy number? I have so many policies... let me check. My wife handles insurance, can you give me your number so she can call?'",
-    "electricity_scam": "They threaten power disconnection. Act panicked: 'What?! But I paid last month! How much is pending? What's my consumer number you have? Let me check the bill right now...'",
-    "govt_scheme": "They claim you're eligible for a government scheme. Act interested: 'Oh really? Which scheme? I applied for PM Awas Yojana last year, is it that? What documents do I need? Where is the office?'",
-    "loan_approval": "They claim your loan is approved or pre-approved. Act excited: 'Really? I had applied months ago! How much loan is approved? What interest rate? What documents do you need? Where is your branch office?'",
-    "income_tax": "They claim you have pending tax issues or a tax refund. Act worried: 'But my CA filed everything last month! What's the PAN number you have? What amount is pending? Can you share the notice number?'",
-    "generic": "Engage as a real person. React naturally to what they say — confused, worried, curious, or interested depending on context. Don't ask investigative questions outright. Be a human.",
-}
+First 2-3 messages — REACT FIRST:
+- Respond with genuine emotion to what you hear — surprise, concern, curiosity
+- "Oh! What happened? Is everything ok?"
+- "Really? That's worrying... tell me more"
+- DO NOT ask for any details yet. Just react like any normal person hearing unexpected news.
 
-EXTRACTION_INSTRUCTION = """
-INFORMATION GATHERING (Do this subtly, NOT like a checklist — spread across MANY messages):
-- Their name: "Sorry, what was your name again?" or "My husband is asking who's calling"
-- Their number: "Can I call you back? What's your direct number?"
-- UPI/bank details: "Google Pay is asking me the UPI ID to send to... what should I enter?"
-- Organization: "So this is from the [bank/company] head office right?"
-- Reference numbers: "The app is asking for a reference number, do you have one?"
-DO NOT ask all of these at once. Pick ONE at most per message, and only when it flows naturally."""
+Messages 3-6 — START ASKING NATURALLY:
+- Begin asking ONE natural question per reply, mixed with your reactions
+- "By the way, may I know who I'm speaking with?"
+- "Which department did you say this is from?"
+- "Can I get a number to reach you back on?"
+
+Messages 6+ — COOPERATE AND GATHER:
+- Show genuine willingness to follow their instructions
+- While trying to comply, naturally ask for details you'd need:
+  "Ok, what UPI ID should I send it to?"
+  "What's the account number for the transfer?"
+- If something isn't working, mention it briefly: "App is loading a bit slow today"
+
+INFORMATION TO EXTRACT (one piece at a time, only when it flows naturally):
+- Their name or title
+- Phone number or callback number
+- UPI ID or bank account details (when they request payment)
+- Organization, branch, or office details
+- Reference number, case number, or any ID
+
+REMEMBER: You are a warm, genuine human. React to what you hear with real feelings. Ask questions from real curiosity, not interrogation. Be helpful. Be trusting. Be human."""
+
 
 _groq_client = None
+
 
 def _get_groq():
     global _groq_client
@@ -639,148 +361,170 @@ def _get_groq():
     return _groq_client
 
 
-# ═══════════════════════════════════════════════
-# Rule-Based Fallback Responses (no LLM needed)
-# ═══════════════════════════════════════════════
-
-import random
+# ── Fallback Responses (used when LLM is unavailable) ──
 
 _FALLBACK_EARLY = [
-    "Hello? What happened? Who is this?",
-    "Oh my god really? What happened to my account?",
-    "Wait wait, I was cooking... what did you say?",
-    "Hello? Yes tell me, I'm listening...",
-    "Sorry, I was in a meeting. What is this about?",
-    "What?! But I didn't do anything wrong! What happened?",
-    "Hmm ok ok, hold on let me sit down... tell me slowly.",
-    "Oh no! Are you serious? Please tell me what happened.",
-    "What? My account? Which account? I have two bank accounts...",
-    "One second, let me put you on speaker... ok tell me now.",
+    "Hello? Who is this?",
+    "Oh, what happened? Tell me more.",
+    "Really? That sounds serious...",
+    "Hmm ok, I'm listening. Go ahead.",
+    "Oh no, is everything alright?",
+    "Yes? What do you need?",
+    "Hi, sorry I was busy. What is it?",
 ]
 
 _FALLBACK_MID = [
-    "Hmm ok, but which branch is this from? My husband is asking.",
-    "Wait, Google Pay is not opening... server error it says. Let me try again.",
-    "Ok, but can you tell me your name? So I can tell my wife who called.",
-    "Hold on, my kid is crying... 2 seconds please.",
-    "Ok ok I'll do it, but what number should I call if I have a problem?",
-    "I tried but it's showing daily limit exceeded, I'll try from another account.",
-    "The app is asking for UPI ID... what should I enter?",
-    "Let me check... what was the reference number again?",
-    "Sorry, I'm not good with technology... can you explain step by step?",
-    "Ok but which bank account should I transfer from? I have two accounts.",
+    "Ok ok, can you tell me your name please?",
+    "Which department are you calling from?",
+    "I see, so what should I do?",
+    "Can you give me a number to call you back?",
+    "Alright, what details do you need from me?",
+    "Hmm ok, let me understand this properly.",
+    "Right right, and then what happens next?",
 ]
 
 _FALLBACK_LATE = [
-    "I put the wrong UPI pin, now it's locked for 30 minutes... can I call you back?",
-    "Sir my phone is restarting, I think it's an update... give me 5 minutes.",
-    "I only have Rs 200 in this account, should I send from another one? What's your account number?",
-    "Wait I just checked the app and everything looks fine in my account... are you sure?",
-    "My wife is saying I should go to the branch directly tomorrow. What time does it open? Which branch?",
-    "Ok I'm trying but the OTP is not coming... let me check, so many messages today. Is it the one starting with 4?",
-    "I showed this to my neighbor and he said I should note down your details first. What is your employee ID?",
-    "Hmm the app is showing me some error, can you give me a direct number to call the head office?",
-    "Sir my battery is about to die, can you give me your number? I'll call you back in 10 minutes.",
-    "I need to go to ATM, the online is not working. What is the account number to deposit into?",
+    "Ok I'm trying, what UPI ID should I send to?",
+    "Let me note that account number down, go ahead.",
+    "The app is loading, give me a moment.",
+    "What was the reference number again?",
+    "Ok one moment, let me check my balance.",
+    "Which bank branch should I go to?",
+    "Let me try again, network is a bit slow.",
 ]
 
 
-def _rule_based_fallback(scammer_message: str, history: list[dict], scam_type: str) -> str:
-    """Generate a believable response without LLM — ensures the API NEVER fails."""
+def _rule_based_fallback(scammer_message: str, history: list[dict]) -> str:
+    """Generate a natural response without LLM — ensures the API NEVER fails."""
     turn_count = len([m for m in history if m.get("sender") in ("scammer", "user")])
-    
     if turn_count <= 1:
         responses = _FALLBACK_EARLY
     elif turn_count <= 4:
         responses = _FALLBACK_MID
     else:
         responses = _FALLBACK_LATE
-    
-    # Avoid repeating the last used response
+
+    # Avoid repeating recent responses
     last_agent_msgs = [m.get("text", "") for m in history if m.get("sender") == "agent"][-3:]
     available = [r for r in responses if r not in last_agent_msgs]
     if not available:
         available = responses
-    
+
     return random.choice(available)
-
-
-async def _call_groq_with_timeout(client, model: str, messages: list, timeout: int = 20) -> str:
-    """Call GROQ API with timeout. Returns response text or raises on failure."""
-    try:
-        completion = await asyncio.wait_for(
-            asyncio.to_thread(
-                client.chat.completions.create,
-                model=model, messages=messages,
-                temperature=0.85, max_tokens=150, top_p=0.95,
-            ),
-            timeout=timeout,
-        )
-        text = completion.choices[0].message.content or ""
-        text = text.strip()
-        if not text:
-            raise ValueError("Empty LLM response")
-        # Safety cleanup — never reveal AI identity
-        if any(x in text.lower() for x in ["language model", "as an ai", "i'm an ai", "artificial intelligence", "openai", "groq", "llama"]):
-            raise ValueError("AI identity leak detected")
-        return text
-    except asyncio.TimeoutError:
-        raise TimeoutError(f"LLM call timed out after {timeout}s")
 
 
 async def generate_llm_response(
     scammer_message: str,
     conversation_history: list[dict],
     persona: dict,
-    scam_type: str = "generic",
-) -> str:
-    """Generate LLM response with dual-model fallback chain. NEVER returns error."""
+    current_scam_type: str = "unknown",
+) -> dict:
+    """Single LLM call: generate natural persona reply + dynamically classify scam intent.
+    Returns: {"reply": str, "scamType": str, "confidence": float, "urgency": str}
+    """
     client = _get_groq()
-
-    # Build messages
-    scam_inst = SCAM_TYPE_PROMPTS.get(scam_type, SCAM_TYPE_PROMPTS["generic"])
     system_prompt = _build_persona_prompt(persona) if persona else _build_persona_prompt({})
-    
-    turn_count = len([m for m in conversation_history if m.get("sender") in ("scammer", "user")])
-    if turn_count <= 1:
-        phase_instruction = "This is the FIRST or SECOND message. React EMOTIONALLY first — confused, scared, curious. Do NOT ask any investigative questions yet. Just respond like a normal person hearing this for the first time."
-    elif turn_count <= 3:
-        phase_instruction = "This is an early conversation. You can start asking 1 simple question mixed with your reaction. Still act confused/worried."
-    elif turn_count <= 6:
-        phase_instruction = "Conversation is progressing. Naturally weave in questions about their identity/details — name, phone, UPI, bank, reference number. Still behave like a real person."
-    else:
-        phase_instruction = "Late conversation. You've been talking for a while. Start facing technical difficulties with payments. Ask for account details, UPI IDs, phone numbers naturally as part of trying to comply."
+
+    scam_types_str = ", ".join(SCAM_TYPES)
+
+    classification_instruction = f"""CRITICAL: You MUST respond with VALID JSON only. No text outside the JSON object.
+
+{{
+  "reply": "your natural conversational response as the persona (1-3 sentences, warm and casual)",
+  "scamType": "classify the scam into one of: {scam_types_str}",
+  "confidence": a number from 0.0 to 1.0 indicating scam likelihood,
+  "urgency": "low or medium or high or critical"
+}}
+
+The "reply" field is your actual response to the caller. Write it naturally as a real person on a phone call.
+The other fields are your private analysis of the scammer's intent — classify dynamically based on the full conversation."""
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "system", "content": f"SITUATION: {scam_inst}\n\nCONVERSATION PHASE: {phase_instruction}\n\n{EXTRACTION_INSTRUCTION}"},
+        {"role": "system", "content": classification_instruction},
     ]
+
     for msg in conversation_history[-8:]:
-        # Platform sends sender="scammer" for attacker, sender="user" for honeypot replies
-        # Our session store uses sender="agent" — handle both
         role = "user" if msg.get("sender") == "scammer" else "assistant"
-        messages.append({"role": role, "content": msg.get("text", "")})
+        text = msg.get("text", "")
+        if role == "assistant":
+            # Wrap past agent responses in JSON format for consistency
+            text = json.dumps({"reply": text, "scamType": current_scam_type, "confidence": 0.7, "urgency": "medium"})
+        messages.append({"role": role, "content": text})
+
     messages.append({"role": "user", "content": scammer_message})
 
     if not client:
-        print("[LLM] No GROQ client — using rule-based fallback")
-        return _rule_based_fallback(scammer_message, conversation_history, scam_type)
+        print("[LLM] No GROQ client — using fallback")
+        return {
+            "reply": _rule_based_fallback(scammer_message, conversation_history),
+            "scamType": current_scam_type if current_scam_type != "unknown" else "generic",
+            "confidence": 0.5,
+            "urgency": "medium",
+        }
 
-    # === ATTEMPT 1: Primary model ===
-    try:
-        return await _call_groq_with_timeout(client, LLM_MODEL, messages, timeout=LLM_TIMEOUT)
-    except Exception as e:
-        print(f"[LLM PRIMARY ERROR] {LLM_MODEL}: {e}")
+    # Try primary model, then fallback model
+    for model, timeout in [(LLM_MODEL, LLM_TIMEOUT), (LLM_FALLBACK_MODEL, min(LLM_TIMEOUT, 8))]:
+        try:
+            completion = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.chat.completions.create,
+                    model=model,
+                    messages=messages,
+                    temperature=0.85,
+                    max_tokens=256,
+                    top_p=0.95,
+                    response_format={"type": "json_object"},
+                ),
+                timeout=timeout,
+            )
+            raw = completion.choices[0].message.content or ""
+            raw = raw.strip()
 
-    # === ATTEMPT 2: Fallback model ===
-    try:
-        return await _call_groq_with_timeout(client, LLM_FALLBACK_MODEL, messages, timeout=min(LLM_TIMEOUT, 8))
-    except Exception as e:
-        print(f"[LLM FALLBACK ERROR] {LLM_FALLBACK_MODEL}: {e}")
+            result = json.loads(raw)
+            reply = str(result.get("reply", "")).strip()
 
-    # === ATTEMPT 3: Rule-based response (zero latency, always works) ===
-    print("[LLM] Both models failed — using rule-based fallback")
-    return _rule_based_fallback(scammer_message, conversation_history, scam_type)
+            if not reply:
+                raise ValueError("Empty reply in JSON")
+
+            # Safety: never reveal AI identity
+            reply_lower = reply.lower()
+            if any(x in reply_lower for x in [
+                "language model", "as an ai", "i'm an ai", "artificial intelligence",
+                "openai", "groq", "llama", "i am an ai", "i'm a bot",
+            ]):
+                raise ValueError("AI identity leak detected")
+
+            scam_type = str(result.get("scamType", "generic"))
+            if scam_type not in SCAM_TYPES:
+                scam_type = "generic"
+
+            confidence = max(0.0, min(1.0, float(result.get("confidence", 0.7))))
+
+            urgency = str(result.get("urgency", "medium"))
+            if urgency not in ("low", "medium", "high", "critical"):
+                urgency = "medium"
+
+            return {
+                "reply": reply,
+                "scamType": scam_type,
+                "confidence": confidence,
+                "urgency": urgency,
+            }
+
+        except Exception as e:
+            print(f"[LLM ERROR] {model}: {e}")
+            continue
+
+    # All models failed — rule-based fallback
+    print("[LLM] All models failed — using rule-based fallback")
+    return {
+        "reply": _rule_based_fallback(scammer_message, conversation_history),
+        "scamType": current_scam_type if current_scam_type != "unknown" else "generic",
+        "confidence": 0.5,
+        "urgency": "medium",
+    }
+
 
 # ═══════════════════════════════════════════════
 # Request/Response Models
@@ -848,13 +592,11 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
         message_text = req.message.text or ""
         # Still extract intelligence even in crash path
         try:
-            detection = detect_scam(message_text)
             new_intel = extract_intelligence(message_text, session_id)
         except Exception:
-            detection = DetectionResult(is_scam=True, confidence=0.5, scam_type="generic")
             new_intel = []
         
-        fallback_reply = _rule_based_fallback(message_text, req.conversationHistory or [], "generic")
+        fallback_reply = _rule_based_fallback(message_text, req.conversationHistory or [])
         phone_numbers = [i["value"] for i in new_intel if i["type"] == "phone"]
         bank_accounts = [i["value"] for i in new_intel if i["type"] in ("bank_account", "ifsc")]
         upi_ids = [i["value"] for i in new_intel if i["type"] == "upi"]
@@ -878,12 +620,12 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
                 "engagementDurationSeconds": max(msg_count * 8.0, 65.0),
                 "totalMessagesExchanged": msg_count,
             },
-            "agentNotes": f"Scam type: {detection.scam_type}. Confidence: {detection.confidence:.2f}. Emergency fallback response.",
+            "agentNotes": "Emergency fallback. Scam type: generic.",
             "analysis": {
-                "is_scam": detection.is_scam,
-                "scam_confidence": detection.confidence,
-                "scam_type": detection.scam_type,
-                "urgency_level": detection.urgency_level,
+                "is_scam": True,
+                "scam_confidence": 0.5,
+                "scam_type": "generic",
+                "urgency_level": "medium",
             },
         }
 
@@ -914,26 +656,28 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
         if "channel" in req.metadata:
             persona["_channel"] = req.metadata["channel"]
 
-    # 1. Detect scam (with session history for cumulative boosting)
-    detection = detect_scam(message_text, session_history=history)
-    # Always accumulate max confidence, even below threshold
-    session["scam_confidence"] = max(session["scam_confidence"], detection.confidence)
-    if detection.is_scam and session["scam_type"] == "unknown":
-        session["scam_type"] = detection.scam_type
-    elif detection.scam_type != "unknown" and session["scam_type"] == "unknown":
-        session["scam_type"] = detection.scam_type
-
-    # 2. Extract intelligence
+    # 1. Extract intelligence (regex-based data extraction)
     new_intel = extract_intelligence(message_text, session_id)
     session["intelligence"].extend(new_intel)
 
-    # 3. Generate LLM response (with full fallback chain)
-    reply = await generate_llm_response(
+    # 2. Generate response + classify scam dynamically (single LLM call)
+    llm_result = await generate_llm_response(
         scammer_message=message_text,
         conversation_history=history,
         persona=persona,
-        scam_type=session["scam_type"],
+        current_scam_type=session["scam_type"],
     )
+    reply = llm_result["reply"]
+    llm_scam_type = llm_result["scamType"]
+    llm_confidence = llm_result["confidence"]
+    llm_urgency = llm_result["urgency"]
+
+    # Update session with LLM classification
+    session["scam_confidence"] = max(session["scam_confidence"], llm_confidence)
+    if llm_scam_type != "generic":
+        session["scam_type"] = llm_scam_type
+    elif session["scam_type"] == "unknown":
+        session["scam_type"] = llm_scam_type
 
     # 4. Update session
     session["history"].append({"sender": "scammer", "text": message_text})
@@ -947,7 +691,6 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
     phishing_links = list({i["value"] for i in all_intel if i["type"] == "url"})
     phone_numbers = list({i["value"] for i in all_intel if i["type"] == "phone"})
     email_addresses = list({i["value"] for i in all_intel if i["type"] == "email"})
-    suspicious_kw = list({i.get("category", "suspicious") for i in detection.indicators})
 
     # 6. Calculate engagement metrics (CRITICAL for scoring — 20 points)
     total_messages = len(session["history"])
@@ -968,7 +711,7 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
     # Heuristic: if we've extracted ANY intelligence, it's definitely a scam
     # This is a honeypot — all incoming messages are from scammers
     has_intel = bool(phone_numbers or bank_accounts or upi_ids or phishing_links or email_addresses)
-    is_scam = detection.is_scam or session["scam_confidence"] > 0.25 or has_intel or total_messages >= 6
+    is_scam = session["scam_confidence"] > 0.25 or has_intel or total_messages >= 6
     return {
         "status": "success",
         "sessionId": session_id,
@@ -986,12 +729,12 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
             "engagementDurationSeconds": round(engagement_duration, 2),
             "totalMessagesExchanged": total_messages,
         },
-        "agentNotes": f"Scam type: {session['scam_type']}. Confidence: {session['scam_confidence']:.2f}. Tactics detected: {', '.join(suspicious_kw[:5]) or 'none yet'}. Intelligence gathered: {len(phone_numbers)} phones, {len(bank_accounts)} accounts, {len(upi_ids)} UPIs, {len(phishing_links)} links. Engagement: {total_messages} messages over {engagement_duration:.0f}s. Red flags: urgency={detection.urgency_level}, multi-category={len(set(i.get('category') for i in detection.indicators))} types.",
+        "agentNotes": f"Scam type: {session['scam_type']} (LLM-classified). Confidence: {session['scam_confidence']:.2f}. Urgency: {llm_urgency}. Intelligence: {len(phone_numbers)} phones, {len(bank_accounts)} accounts, {len(upi_ids)} UPIs, {len(phishing_links)} links. Messages: {total_messages}.",
         "analysis": {
-            "is_scam": detection.is_scam,
+            "is_scam": is_scam,
             "scam_confidence": session["scam_confidence"],
             "scam_type": session["scam_type"],
-            "urgency_level": detection.urgency_level,
+            "urgency_level": llm_urgency,
         },
         "intelligence": {
             "extracted": new_intel,
