@@ -404,12 +404,13 @@ def _get_groq_clients() -> list:
 
 
 # ── Fallback Responses (used when ALL LLM keys are exhausted) ──
+# ALL responses MUST end with a question mark (?) — scoring requires it.
 
 _FALLBACK_EARLY = [
     "Hello? Who is this?",
-    "Oh, what happened? Tell me more.",
-    "Really? That sounds serious...",
-    "Hmm ok ok, I'm listening. Go ahead.",
+    "Oh, what happened? Can you tell me more?",
+    "Really? That sounds serious, what should I do?",
+    "Hmm ok ok, I'm listening. What happened exactly?",
     "Oh no, is everything alright?",
     "Yes yes? What do you need from me?",
 ]
@@ -420,16 +421,16 @@ _FALLBACK_MID = [
     "I see I see, so what should I do now?",
     "Can you give me a number to call you back?",
     "Alright, what details do you need from me?",
-    "Hmm ok, let me understand this properly first.",
+    "Hmm ok, can you explain that again slowly?",
 ]
 
 _FALLBACK_LATE = [
     "Ok I'm trying, what UPI ID should I send to?",
-    "Let me note that account number, go ahead sir.",
-    "The app is loading, give me one moment please.",
+    "Let me note that account number, what was it again?",
+    "The app is loading... what number should I enter?",
     "What was the reference number again?",
-    "Ok one moment, let me check my balance first.",
-    "Network is a bit slow today, don't hang up please!",
+    "Ok one moment, which account are you talking about?",
+    "Network is slow today, can you repeat that last part?",
 ]
 
 
