@@ -47,7 +47,7 @@ flowchart TD
 ## Features
 
 - **Realistic AI Persona** — Engages scammers naturally with configurable name, age, occupation, location, bank, gender, and language
-- **LLM-First with Rule-Based Fallback** — Primary response generation via LLM; 18 pre-written investigative fallback responses for complete LLM failure (all ending with questions for continued engagement)
+- **LLM-First with Rule-Based Fallback** — Primary response generation via LLM; 38 pre-written investigative fallback responses covering 3 conversation phases (early/mid/late) for complete LLM failure (all ending with questions for continued engagement)
 - **Dual Intelligence Extraction** — LLM extracts 11 data types per turn; compiled regex safety-net catches anything missed; history re-extraction ensures no data loss on stateless platforms
 - **18+ Scam Type Classifications** — `bank_fraud`, `upi_fraud`, `kyc_scam`, `otp_fraud`, `lottery_scam`, `job_scam`, `investment_scam`, `crypto_investment`, `threat_scam`, `phishing`, `tech_support`, `customs_fraud`, `insurance_fraud`, `electricity_scam`, `loan_approval`, `income_tax`, `govt_scheme`, `generic`
 - **Dynamic Red Flag Engine** — 10 pattern categories scanned against all conversation text, reported with counts in agentNotes
@@ -55,7 +55,7 @@ flowchart TD
 - **Text-to-Speech** — ElevenLabs Turbo v2.5 with free voices (Rachel/Antoni)
 - **PostgreSQL Persistence** — Optional session data storage with messages, intelligence, and timestamps
 - **Admin Dashboard** — Real-time stats, session list with pagination, conversation replay, settings management
-- **5-Level Fallback Chain** — 2 API keys × 2 models + rule-based = guaranteed response delivery within 24 seconds
+- **6-Level Fallback Chain** — 2 API keys × 8b (primary + retry) + 2 API keys × fallback model + rule-based = guaranteed response delivery within 24 seconds
 
 ---
 
@@ -65,7 +65,7 @@ flowchart TD
 |---|---|---|
 | **Backend** | FastAPI 3.0 (Python 3.10+) | Async API with auto-validation and docs |
 | **Primary LLM** | Groq — Llama 3.1 8B Instant | Fast conversation + classification (12s timeout) |
-| **Fallback LLM** | Groq — Llama 3.3 70B Versatile | Higher quality fallback (8s timeout) |
+| **Fallback LLM** | Groq — Llama 3.1 8B Instant (retry) | Rate-limit-safe retry across dual keys (12s timeout) |
 | **TTS** | ElevenLabs — Turbo v2.5 | Text-to-speech with free voices (optional) |
 | **STT** | Whisper Large v3 via Groq | Speech transcription for voice detection (optional) |
 | **Database** | PostgreSQL + asyncpg | Session persistence and analytics (optional) |
@@ -256,7 +256,7 @@ The persona system keeps scammers engaged through multi-phase conversation strat
 - **Turns 3-5**: Willing but confused — eager to help but needs clarification, asks for caller's details
 - **Turns 6+**: Active cooperation — pretends to follow instructions while naturally extracting more data (UPI IDs, account numbers, reference numbers)
 
-All responses end with exactly one question to keep the conversation flowing. The LLM prompt enforces this, and all 18 rule-based fallback responses also end with investigative questions.
+All responses end with exactly one question to keep the conversation flowing. The LLM prompt enforces this, and all 38 rule-based fallback responses also end with investigative questions.
 
 ### Red Flag Analysis
 
@@ -284,22 +284,26 @@ Red flags are listed explicitly in `agentNotes` with counts and a natural-langua
 The system implements a 5-level fallback chain to guarantee response delivery:
 
 ```
-Level 1: Primary Key + Primary Model (llama-3.1-8b-instant, 12s timeout)
+Level 1: Primary Key + 8b-instant (12s timeout)
+    ↓ failure (rate limit / timeout)
+Level 2: Recovery Key + 8b-instant (12s timeout)
     ↓ failure
-Level 2: Primary Key + Fallback Model (llama-3.3-70b-versatile, 8s timeout)
+Level 3: Primary Key + 8b-instant retry (with 1.5s 429 cooldown)
     ↓ failure
-Level 3: Recovery Key + Primary Model (remaining budget)
+Level 4: Recovery Key + 8b-instant retry (with 1.5s 429 cooldown)
     ↓ failure
-Level 4: Recovery Key + Fallback Model (remaining budget)
+Level 5: Primary Key + Fallback Model (8s timeout, configurable)
     ↓ failure
-Level 5: Rule-Based Response (instant, no API call)
+Level 6: Recovery Key + Fallback Model (8s timeout, configurable)
+    ↓ failure
+Level 7: Rule-Based Response (instant, no API call)
          + Keyword Scam Classification
          + Regex Intelligence Extraction
 
 Global timeout budget: 24 seconds (always responds within 30s API limit)
 ```
 
-Even at Level 5 (complete LLM failure), the system still:
+Even at Level 7 (complete LLM failure), the system still:
 - Classifies scam types via keyword matching (18 categories)
 - Extracts all intelligence via regex patterns
 - Returns contextually appropriate responses (phase-aware: early/mid/late turns)
@@ -315,7 +319,7 @@ Even at Level 5 (complete LLM failure), the system still:
 | `RECOVERY_KEY` | No | — | Backup Groq key for rate limit fallback |
 | `API_KEY` | No | auto-generated | API authentication key |
 | `LLM_MODEL` | No | `llama-3.1-8b-instant` | Primary Groq model |
-| `LLM_FALLBACK_MODEL` | No | `llama-3.3-70b-versatile` | Fallback Groq model |
+| `LLM_FALLBACK_MODEL` | No | `llama-3.1-8b-instant` | Fallback Groq model (configurable to `llama-3.3-70b-versatile`) |
 | `LLM_TIMEOUT` | No | `12` | Primary model timeout (seconds) |
 | `ELEVENLABS_API_KEY` | No | — | ElevenLabs key for TTS |
 | `POSTGRES_HOST` | No | `localhost` | PostgreSQL host |

@@ -7,7 +7,7 @@ Single-file FastAPI server (`api/index.py`, ~1400 lines) that acts as an intelli
 ## Key Design Decisions
 
 1. **LLM-First Intelligence Extraction** — The LLM extracts all data types as part of its JSON response. A compiled regex safety-net catches anything the LLM misses. History re-extraction ensures no data loss on stateless platforms.
-2. **Dual API Key Fallback with Global Timeout** — Primary `GROQ_API_KEY` + `RECOVERY_KEY` with automatic failover across 2 keys × 2 models = 4 LLM fallback combinations + 1 rule-based fallback. A 24-second global deadline ensures we never exceed the 30-second API timeout.
+2. **Dual API Key Fallback with Global Timeout** — Primary `GROQ_API_KEY` + `RECOVERY_KEY` with automatic failover. Strategy: exhaust 8b-instant across all keys with retries (including 429 cooldown) before trying fallback model. 6 LLM attempts + 1 rule-based = 7-level chain. A 24-second global deadline ensures we never exceed the 30-second API timeout.
 3. **Single LLM Call Per Turn** — One call handles response generation + scam classification + intelligence extraction via `response_format={"type": "json_object"}`.
 4. **Engagement-First Persona** — The agent plays a trusting, naive victim who actively cooperates with scammers while subtly identifying red flags through innocent observations.
 5. **Serverless-Safe History Re-extraction** — On every turn, safety regexes run on the full conversation history to recover intelligence from previous turns, ensuring no data loss on stateless platforms like Vercel.
@@ -152,15 +152,19 @@ Scans ALL scammer messages against 10 pattern categories. Results are reported i
 5-level fallback ensures the API **always** returns a valid response:
 
 ```
-Level 1: Primary Key + Primary Model (llama-3.1-8b-instant, 12s timeout)
+Level 1: Primary Key + 8b-instant (12s timeout)
     ↓ failure (rate limit, timeout, parse error)
-Level 2: Primary Key + Fallback Model (llama-3.3-70b-versatile, 8s timeout)
+Level 2: Recovery Key + 8b-instant (12s timeout)
     ↓ failure
-Level 3: Recovery Key + Primary Model (remaining budget)
+Level 3: Primary Key + 8b-instant retry (1.5s 429 cooldown)
     ↓ failure
-Level 4: Recovery Key + Fallback Model (remaining budget)
+Level 4: Recovery Key + 8b-instant retry (1.5s 429 cooldown)
     ↓ failure
-Level 5: Rule-Based Response (instant, no API call)
+Level 5: Primary Key + Fallback Model (8s timeout)
+    ↓ failure
+Level 6: Recovery Key + Fallback Model (8s timeout)
+    ↓ failure
+Level 7: Rule-Based Response (instant, no API call)
          + Keyword Scam Classification
          + Regex Intelligence Extraction
 
@@ -169,13 +173,13 @@ Global timeout budget: 24 seconds (always under 30s API limit)
 
 ### Rule-Based Fallback Responses
 
-18 pre-written responses cover 3 conversation phases (6 per phase):
+38 pre-written responses cover 3 conversation phases (12 early + 12 mid + 14 late):
 
-- **Early (turns 1-2)**: Surprise and concern — "Oh my god, what happened?", "Are you serious sir?"
+- **Early (turns 1-2)**: Surprise and concern — "Oh my god, what happened?", "Is this genuine sir?"
 - **Mid (turns 3-5)**: Willing but confused — "Which department are you calling from?", "Can you tell me your good name?"
 - **Late (turns 6+)**: Active cooperation — "What UPI ID should I send to?", "What was the reference number again?"
 
-All 18 responses end with exactly one question mark to ensure continued engagement scoring.
+All 38 responses end with exactly one question mark to ensure continued engagement scoring. Cross-pool overflow prevents repetition even if one phase is exhausted.
 
 ---
 
@@ -230,7 +234,7 @@ When configured, `POST /api/session/end` persists the session to PostgreSQL:
 |---|---|---|
 | Backend | FastAPI 3.0 + Uvicorn | Async HTTP server with auto-validation |
 | Primary LLM | Groq — Llama 3.1 8B Instant | Fast response generation (12s timeout) |
-| Fallback LLM | Groq — Llama 3.3 70B Versatile | Higher quality fallback (8s timeout) |
+| Fallback LLM | Groq — Llama 3.1 8B Instant (retry, configurable) | Rate-limit-safe retry across dual keys (8s timeout) |
 | TTS | ElevenLabs Turbo v2.5 | Text-to-speech with free voices |
 | STT | Whisper Large v3 (via Groq) | Speech transcription |
 | Database | PostgreSQL + asyncpg | Optional session persistence |
