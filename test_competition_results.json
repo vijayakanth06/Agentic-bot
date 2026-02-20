@@ -1,0 +1,46 @@
+[
+  {
+    "scenario": "phishing_link",
+    "score": {
+      "scamDetection": 20,
+      "intelligenceExtraction": 20,
+      "engagementQuality": 20,
+      "responseStructure": 20.0,
+      "total": 80.0
+    },
+    "response_times": [
+      10.193974733352661,
+      10.21671724319458,
+      10.264698505401611,
+      10.20346474647522,
+      2.197563409805298,
+      2.2209134101867676,
+      2.222606658935547,
+      2.2258565425872803,
+      2.2680141925811768,
+      2.2067387104034424
+    ],
+    "total_time": 54.22767186164856,
+    "intel_details": [
+      {
+        "fakeKey": "phishingLink",
+        "fakeValue": "http://amaz0n-deals.fake-site.com/claim?id=12345",
+        "outputKey": "phishingLinks",
+        "extractedValues": [
+          "http://amaz0n-deals.fake-site.com/claim?id=12345",
+          "http://amaz0n-deals.fake-site.com/claim?id=12345."
+        ],
+        "found": true
+      },
+      {
+        "fakeKey": "emailAddress",
+        "fakeValue": "offers@fake-amazon-deals.com",
+        "outputKey": "emailAddresses",
+        "extractedValues": [
+          "offers@fake-amazon-deals.com"
+        ],
+        "found": true
+      }
+    ]
+  }
+]

@@ -41,6 +41,11 @@ reports/*.pdf
 test_report.*
 .vercel/
 
+# Test outputs (don't commit to repo)
+test_output.txt
+test_results.json
+test_dynamic_results.json
+
 # Logs
 *.log
 logs/
