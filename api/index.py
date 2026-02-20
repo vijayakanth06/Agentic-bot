@@ -1,15 +1,37 @@
 """
-Agentic Honeypot — Self-Contained FastAPI Server with PostgreSQL.
+Agentic Honeypot — Self-Contained FastAPI Server v3.0
 
-Single-file FastAPI app with all logic inline.
-Handles: POST /api/honeypot, POST /api/voice/detect, POST /api/tts
-         POST /api/session/end, GET /api/admin/*, GET /admin
+An AI-powered honeypot agent that engages scammers in natural conversation
+using LLM-driven personas, extracts intelligence data (phone numbers, UPI IDs,
+bank accounts, URLs, emails, case IDs, policy numbers, order numbers), and
+persists session analytics to PostgreSQL.
+
+Architecture:
+    - Single-file FastAPI application with all logic inline
+    - Dual-strategy response: LLM-first with rule-based fallback
+    - Hybrid intelligence extraction: LLM + regex safety-net
+    - Keyword-based scam type classification (18 categories)
+    - Dynamic red flag analysis engine (10 pattern categories)
+    - Dual API key fallback with 24-second global timeout budget
+
+Endpoints:
+    POST /api/honeypot       — Main honeypot: process scam message, return reply + analysis
+    POST /api/voice/detect   — Detect AI-generated speech from audio upload
+    POST /api/tts            — Text-to-speech via ElevenLabs
+    POST /api/session/end    — End session, persist all data to PostgreSQL
+    GET  /api/admin/*        — Admin dashboard API (stats, sessions, settings)
+    GET  /health             — Server health check
+
+Author: Tejash S
+License: MIT
 """
 
 import os
 import re
 import json
+import random
 import asyncio
+import logging
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -27,6 +49,8 @@ from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+logger = logging.getLogger("honeypot")
+
 # ═══════════════════════════════════════════════
 # Configuration
 # ═══════════════════════════════════════════════
@@ -40,7 +64,7 @@ LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "12"))
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 PERSONA_NAME = os.environ.get("PERSONA_NAME", "Tejash S")
 PERSONA_AGE = os.environ.get("PERSONA_AGE", "28")
-PERSONA_OCCUPATION = os.environ.get("PERSONA_OCCUPATION", "Software Engineer at Grootan")
+PERSONA_OCCUPATION = os.environ.get("PERSONA_OCCUPATION", "Software Engineer")
 PERSONA_LOCATION = os.environ.get("PERSONA_LOCATION", "Perundurai")
 
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1"
@@ -300,8 +324,6 @@ def _safety_extract(message: str) -> list[dict]:
 # ═══════════════════════════════════════════════
 # LLM Client — Dynamic Classification & Response
 # ═══════════════════════════════════════════════
-
-import random
 
 
 def _build_persona_prompt(p: dict) -> str:
@@ -642,10 +664,13 @@ RULES:
 # ═══════════════════════════════════════════════
 
 class MessageInput(BaseModel):
+    """Incoming message from the conversation participant."""
     sender: str = "scammer"
     text: str = ""
+    timestamp: Optional[str] = None  # ISO 8601 or epoch ms — accepted but not required
 
 class HoneypotRequest(BaseModel):
+    """Request payload for the main honeypot endpoint."""
     sessionId: str = Field(default="")
     message: MessageInput
     conversationHistory: list[dict] = []
@@ -657,6 +682,7 @@ class HoneypotRequest(BaseModel):
 # ═══════════════════════════════════════════════
 
 def get_session(session_id: str) -> dict:
+    """Get or create an in-memory session for the given session ID."""
     if session_id not in sessions:
         sessions[session_id] = {
             "history": [],
@@ -691,7 +717,7 @@ async def health():
 
 @app.post("/api/honeypot")
 async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None)):
-    """Process scam message — GUVI evaluation compatible. NEVER fails."""
+    """Process scam message and return honeypot response. Guaranteed to never fail."""
     try:
         return await _honeypot_core(req, x_api_key)
     except HTTPException:
@@ -718,13 +744,18 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
         fb_cases = list({i["value"] for i in fallback_intel if i["type"] in ("case_id", "reference_id")})
         fb_policies = list({i["value"] for i in fallback_intel if i["type"] == "policy_number"})
         fb_orders = list({i["value"] for i in fallback_intel if i["type"] == "order_number"})
+        # Classify scam type from conversation text even in emergency fallback
+        all_text = message_text + " " + " ".join(
+            m.get("text", "") for m in (req.conversationHistory or []) if m.get("sender") in ("scammer",)
+        )
+        fb_scam_type, fb_conf = _classify_scam_keywords(all_text)
         return {
             "status": "success",
             "sessionId": session_id,
             "reply": fallback_reply,
             "scamDetected": True,
-            "scamType": "generic",
-            "confidenceLevel": 0.65,
+            "scamType": fb_scam_type,
+            "confidenceLevel": fb_conf,
             "totalMessagesExchanged": msg_count,
             "engagementDurationSeconds": round(fallback_duration, 2),
             "extractedIntelligence": {
@@ -741,18 +772,22 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
                 "engagementDurationSeconds": round(fallback_duration, 2),
                 "totalMessagesExchanged": msg_count,
             },
-            "agentNotes": f"Emergency fallback response. Scam type: generic. Red flags identified: urgency/time pressure tactics, unsolicited contact from unknown party, request for sensitive data (account/OTP/credentials), impersonation of authority figure, potential phishing attempt, suspicious payment/fee demand. Extracted: {len(fb_phones)} phone numbers, {len(fb_accounts)} bank accounts, {len(fb_upis)} UPI IDs, {len(fb_urls)} links, {len(fb_emails)} emails, {len(fb_cases)} case IDs, {len(fb_policies)} policy numbers, {len(fb_orders)} order numbers. The scammer used social engineering tactics including urgency and fear, identity impersonation, requests for sensitive data, and deceptive communication.",
+            "agentNotes": f"Emergency fallback response. Scam type: {fb_scam_type} (confidence: {fb_conf}). Red flags identified: urgency/time pressure tactics, unsolicited contact from unknown party, request for sensitive data (account/OTP/credentials), impersonation of authority figure, potential phishing attempt, suspicious payment/fee demand. Extracted: {len(fb_phones)} phone numbers, {len(fb_accounts)} bank accounts, {len(fb_upis)} UPI IDs, {len(fb_urls)} links, {len(fb_emails)} emails, {len(fb_cases)} case IDs, {len(fb_policies)} policy numbers, {len(fb_orders)} order numbers. The scammer used social engineering tactics including urgency and fear, identity impersonation, requests for sensitive data, and deceptive communication.",
             "analysis": {
                 "is_scam": True,
-                "scam_confidence": 0.65,
-                "scam_type": "generic",
+                "scam_confidence": fb_conf,
+                "scam_type": fb_scam_type,
                 "urgency_level": "medium",
             },
         }
 
 
 async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
-    """Core honeypot logic — LLM handles response generation + intelligence extraction."""
+    """Core honeypot logic — orchestrates LLM response, intelligence extraction, and analysis.
+    
+    Pipeline: API key validation → LLM call (response + classification + extraction)
+    → regex safety-net → keyword scam classification → red flag analysis → response.
+    """
     # API key validation
     if x_api_key and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
@@ -840,7 +875,7 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
     session["history"].append({"sender": "agent", "text": reply})
     session["turn_count"] += 1
 
-    # 4. Categorize ALL session intelligence for GUVI format (all 8 scored types)
+    # 4. Categorize ALL session intelligence into evaluation-compatible format
     all_intel = session["intelligence"]
     bank_accounts = list({i["value"] for i in all_intel if i["type"] in ("bank_account", "ifsc")})
     upi_ids = list({i["value"] for i in all_intel if i["type"] == "upi"})
@@ -890,7 +925,7 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
         if re.search(pattern, all_scammer_text, re.I):
             red_flags.append(label)
 
-    # 7. Return GUVI-compatible response with ALL scoring fields
+    # 7. Build evaluation-compatible response with all scoring fields
     has_intel = bool(phone_numbers or bank_accounts or upi_ids or phishing_links or email_addresses or case_ids or policy_numbers or order_numbers)
     is_scam = session["scam_confidence"] > 0.25 or has_intel or total_messages >= 6
     final_scam_type = session["scam_type"] if session["scam_type"] != "unknown" else "generic"
@@ -963,7 +998,7 @@ async def voice_detect_endpoint(
     audio: UploadFile = File(...),
     x_api_key: str = Header(None),
 ):
-    """Problem 1 — Detect AI-generated speech."""
+    """Detect AI-generated speech from audio upload."""
     if x_api_key and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -1097,7 +1132,7 @@ def _fetch_tts(req: urllib.request.Request) -> tuple[int, bytes]:
         return (0, b"")
 
 
-# Also handle POST at root (in case GUVI tester sends to base URL)
+# Handle POST at root for backward compatibility with evaluators
 @app.post("/")
 async def root_post(req: HoneypotRequest, x_api_key: str = Header(None)):
     return await honeypot_endpoint(req, x_api_key)
