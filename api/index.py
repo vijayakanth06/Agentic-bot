@@ -449,6 +449,46 @@ def _rule_based_fallback(scammer_message: str, history: list[dict]) -> str:
     return random.choice(available)
 
 
+# ── Rule-based scam type classifier (fallback when LLM unavailable) ──
+
+_SCAM_KEYWORDS = {
+    "bank_fraud": r"\b(?:bank|account\s*(?:block|freez|suspend|compromis)|sbi|hdfc|icici|axis\s*bank|rbi\s*(?:directive|circular)|net\s*banking|debit\s*card|credit\s*card)\b",
+    "upi_fraud": r"\b(?:upi|paytm|phonepe|gpay|google\s*pay|collect\s*request|bhim|payment\s*app)\b",
+    "kyc_scam": r"\b(?:kyc|know\s*your\s*customer|aadhaar|aadhar|pan\s*(?:card|number|detail)|verification\s*pending|e-?kyc)\b",
+    "otp_fraud": r"\b(?:otp|one\s*time\s*password|verification\s*code|sms\s*code)\b",
+    "lottery_scam": r"\b(?:lottery|prize|won|winner|lucky\s*draw|jackpot|congratulat|sweepstake)\b",
+    "job_scam": r"\b(?:job|work\s*from\s*home|wfh|salary|vacancy|shortlist|resume|offer\s*letter|data\s*entry|recruitment)\b",
+    "investment_scam": r"\b(?:invest|guaranteed\s*return|mutual\s*fund|stock|trading|portfolio|sip|roi)\b",
+    "crypto_investment": r"\b(?:crypto|bitcoin|btc|ethereum|blockchain|mining|token|nft)\b",
+    "tech_support": r"\b(?:virus|malware|trojan|microsoft|windows|computer\s*(?:infected|hack|problem)|remote\s*access|tech\s*support|antivirus)\b",
+    "phishing": r"\b(?:phishing|verify\s*(?:your|account)|click\s*(?:here|link|below)|login\s*(?:page|verify)|suspicious\s*login|update\s*(?:your|account))\b",
+    "refund_scam": r"\b(?:refund|return(?:ed)?|cashback|money\s*back|failed\s*transaction|reversed)\b",
+    "customs_fraud": r"\b(?:customs|parcel|package|courier|seized|undeclared|import\s*duty|consignment)\b",
+    "insurance_fraud": r"\b(?:insurance|policy\s*(?:maturity|bonus|claim)|lic|premium|endowment|life\s*cover)\b",
+    "electricity_scam": r"\b(?:electric|power\s*(?:cut|supply)|disconnec|bill\s*(?:pending|overdue|unpaid)|meter\s*reading|lineman|eb\s*office)\b",
+    "loan_approval": r"\b(?:loan|pre-?approv|emi|interest\s*rate|disburse|nbfc|personal\s*loan|credit\s*score)\b",
+    "income_tax": r"\b(?:income\s*tax|itr|tax\s*(?:demand|refund|notice|department)|assessment|section\s*148|pan\s*flagged)\b",
+    "govt_scheme": r"\b(?:government|govt|yojana|scheme|subsidy|ministry|pm\s*(?:awas|kisan|mudra)|digital\s*india|benefit)\b",
+    "threat_scam": r"\b(?:arrest|warrant|legal\s*action|court|summon|fir\s*(?:filed|registered)|prosecut|imprison|cbi\s*involved)\b",
+}
+
+
+def _classify_scam_keywords(text: str) -> tuple[str, float]:
+    """Classify scam type using keyword matching on all conversation text.
+    Returns (scam_type, confidence)."""
+    text_lower = text.lower()
+    scores: dict[str, int] = {}
+    for scam_type, pattern in _SCAM_KEYWORDS.items():
+        matches = re.findall(pattern, text_lower, re.I)
+        if matches:
+            scores[scam_type] = len(matches)
+    if not scores:
+        return ("generic", 0.5)
+    best = max(scores, key=scores.get)
+    confidence = min(0.85, 0.5 + scores[best] * 0.1)
+    return (best, confidence)
+
+
 async def generate_llm_response(
     scammer_message: str,
     conversation_history: list[dict],
@@ -507,10 +547,14 @@ RULES:
     # No clients available at all
     if not clients:
         print("[LLM] No API keys configured — using fallback")
+        all_text = scammer_message + " " + " ".join(m.get("text", "") for m in conversation_history if m.get("sender") in ("scammer",))
+        fb_type, fb_conf = _classify_scam_keywords(all_text)
+        if current_scam_type not in ("unknown", "generic"):
+            fb_type = current_scam_type
         return {
             "reply": _rule_based_fallback(scammer_message, conversation_history),
-            "scamType": current_scam_type if current_scam_type != "unknown" else "generic",
-            "confidence": 0.5,
+            "scamType": fb_type,
+            "confidence": fb_conf,
             "urgency": "medium",
             "extractedData": {},
         }
@@ -579,10 +623,14 @@ RULES:
 
     # All clients × all models failed
     print("[LLM] All keys+models failed — using rule-based fallback")
+    all_text = scammer_message + " " + " ".join(m.get("text", "") for m in conversation_history if m.get("sender") in ("scammer",))
+    fb_type, fb_conf = _classify_scam_keywords(all_text)
+    if current_scam_type not in ("unknown", "generic"):
+        fb_type = current_scam_type
     return {
         "reply": _rule_based_fallback(scammer_message, conversation_history),
-        "scamType": current_scam_type if current_scam_type != "unknown" else "generic",
-        "confidence": 0.5,
+        "scamType": fb_type,
+        "confidence": fb_conf,
         "urgency": "medium",
         "extractedData": {},
     }
