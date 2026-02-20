@@ -255,7 +255,7 @@ _PHONE_PATTERN = re.compile(r"\+91[\s-]?\d{10}|\b[6-9]\d{9}\b")
 _SAFETY_PATTERNS = [
     ("phone", _PHONE_PATTERN),
     ("email", _EMAIL_PATTERN),
-    ("upi", re.compile(r"[a-zA-Z0-9._-]+@[a-zA-Z0-9_-]+\b(?!\.)", re.I)),
+    ("upi", re.compile(r"[a-zA-Z0-9._-]+@[a-zA-Z0-9_-]+\b(?!\.[a-zA-Z]{2,})", re.I)),
     ("bank_account", re.compile(r"\b\d{11,18}\b")),
     ("url", re.compile(r"https?://[^\s<>\"']+")),
     ("ifsc", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")),
