@@ -41,7 +41,7 @@ try:
 except ImportError:
     pass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Union
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Header, UploadFile, File, Query
@@ -667,7 +667,7 @@ class MessageInput(BaseModel):
     """Incoming message from the conversation participant."""
     sender: str = "scammer"
     text: str = ""
-    timestamp: Optional[str] = None  # ISO 8601 or epoch ms — accepted but not required
+    timestamp: Optional[Union[str, int, float]] = None  # ISO 8601 string or epoch ms integer
 
 class HoneypotRequest(BaseModel):
     """Request payload for the main honeypot endpoint."""
