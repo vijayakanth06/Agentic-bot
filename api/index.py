@@ -32,10 +32,11 @@ from pydantic import BaseModel, Field
 # ═══════════════════════════════════════════════
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+RECOVERY_KEY = os.environ.get("RECOVERY_KEY", "")  # Fallback Groq key
 API_KEY = os.environ.get("API_KEY", "fae26946fc2015d9bd6f1ddbb447e2f7")
 LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.1-8b-instant")
-LLM_FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")  # Higher quality fallback
-LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "12"))  # primary model timeout (must fit within 30s platform limit)
+LLM_FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
+LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "12"))
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 PERSONA_NAME = os.environ.get("PERSONA_NAME", "Tejash S")
 PERSONA_AGE = os.environ.get("PERSONA_AGE", "28")
@@ -224,58 +225,49 @@ SCAM_TYPES = [
 ]
 
 # ═══════════════════════════════════════════════
-# Intelligence Extraction Engine
+# Intelligence Dedup Helper
 # ═══════════════════════════════════════════════
 
-EXTRACT_PATTERNS = [
-    {"type": "upi", "pattern": re.compile(r"[a-zA-Z0-9._-]+@(upi|ybl|paytm|okaxis|oksbi|okhdfcbank|axl|ibl|apl|gpay|phonepe)", re.I), "confidence": 0.95},
-    # Broad UPI: catches any user@handle where handle has no dots (competition uses @fakebank, @fakeupi etc.)
-    {"type": "upi", "pattern": re.compile(r"[a-zA-Z0-9._-]+@[a-zA-Z0-9_-]+", re.I), "confidence": 0.70},
-    {"type": "phone", "pattern": re.compile(r"(?:\+91[\s-]?)?(?:[6-9]\d{9})|(?:\+91[\s-]?\d{5}[\s-]?\d{5})", re.I), "confidence": 0.85},
-    {"type": "bank_account", "pattern": re.compile(r"(?:account|a/c|ac)\s*(?:number|no|#)?(?:\s+\w+){0,4}?[\s:.-]*(\d{9,18})", re.I), "confidence": 0.80},
-    {"type": "bank_account", "pattern": re.compile(r"\b(\d{12,18})\b", re.I), "confidence": 0.65},
-    {"type": "url", "pattern": re.compile(r"https?://[^\s<>\"']+", re.I), "confidence": 0.85},
-    {"type": "name", "pattern": re.compile(r"(?:(?:my name is|i am|this is|i'?m|call me)\s+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", re.I), "confidence": 0.70},
-    {"type": "ifsc", "pattern": re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b"), "confidence": 0.90},
-    {"type": "email", "pattern": re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", re.I), "confidence": 0.85},
-    # Misc identifiers for richer extraction
-    {"type": "employee_id", "pattern": re.compile(r"(?:employee|emp|staff)\s*(?:id|no|number|#)[\s:.-]*(\w{2,10})", re.I), "confidence": 0.70},
-    {"type": "reference_id", "pattern": re.compile(r"(?:ref(?:erence)?|case|ticket|tracking)\s*(?:id|no|number|#)?[\s:.-]*([A-Z0-9-]{4,20})", re.I), "confidence": 0.75},
-    {"type": "policy_id", "pattern": re.compile(r"(?:policy|consumer|customer)\s*(?:id|no|number|#)[\s:.-]*([A-Z0-9-]{4,20})", re.I), "confidence": 0.70},
-]
-
 _seen_intel: dict[str, set] = {}  # session_id -> set of seen dedup keys
-_MAX_TRACKED_SESSIONS = 500  # Safety bound to prevent unbounded memory growth
+_MAX_TRACKED_SESSIONS = 500
 
 
-def extract_intelligence(message: str, session_id: str = "") -> list[dict]:
-    # Evict oldest tracked sessions if memory bound exceeded
+def _dedup_intel(items: list[dict], session_id: str) -> list[dict]:
+    """Deduplicate intelligence items within a session."""
     if len(_seen_intel) > _MAX_TRACKED_SESSIONS:
-        oldest_keys = list(_seen_intel.keys())[: len(_seen_intel) - _MAX_TRACKED_SESSIONS]
-        for k in oldest_keys:
+        for k in list(_seen_intel.keys())[:len(_seen_intel) - _MAX_TRACKED_SESSIONS]:
             _seen_intel.pop(k, None)
     seen = _seen_intel.setdefault(session_id, set())
+    unique = []
+    for item in items:
+        key = f"{item.get('type', '')}:{str(item.get('value', '')).lower()}"
+        if key not in seen and item.get('value'):
+            seen.add(key)
+            unique.append(item)
+    return unique
+
+
+# ── Lightweight safety-net: catch obvious data the LLM might miss ──
+_SAFETY_PATTERNS = [
+    ("phone", re.compile(r"(?:\+91[\s-]?)?\b[6-9]\d{9}\b", re.I)),
+    ("upi", re.compile(r"[a-zA-Z0-9._-]+@[a-zA-Z0-9_-]+\b(?!\.)", re.I)),
+    ("bank_account", re.compile(r"\b\d{12,18}\b")),
+    ("url", re.compile(r"https?://[^\s<>\"']+")),
+    ("email", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", re.I)),
+    ("ifsc", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")),
+]
+
+
+def _safety_extract(message: str) -> list[dict]:
+    """Minimal regex backup — catches structured data LLM sometimes misses."""
     items = []
-    for spec in EXTRACT_PATTERNS:
-        for match in spec["pattern"].finditer(message):
-            value = match.group(0).strip()
-            if spec["type"] in ("bank_account", "name"):
-                for g in match.groups():
-                    if g:
-                        value = g.strip()
-                        break
-            dedup_key = f"{spec['type']}:{value.lower()}"
-            if dedup_key in seen:
+    for intel_type, pattern in _SAFETY_PATTERNS:
+        for m in pattern.finditer(message):
+            val = m.group(0).strip()
+            # Skip UPI matches that look like emails (contain dots in domain)
+            if intel_type == "upi" and "." in val.split("@")[-1]:
                 continue
-            seen.add(dedup_key)
-            if spec["type"] == "email" and any(value.lower().endswith(f"@{s}") for s in ["upi", "ybl", "paytm"]):
-                continue
-            # Skip broad UPI matches that are actually emails (domain has dots)
-            if spec["type"] == "upi" and "@" in value:
-                domain = value.split("@")[-1]
-                if "." in domain:
-                    continue
-            items.append({"type": spec["type"], "value": value, "confidence": spec["confidence"]})
+            items.append({"type": intel_type, "value": val, "confidence": 0.75})
     return items
 
 # ═══════════════════════════════════════════════
@@ -297,100 +289,110 @@ def _build_persona_prompt(p: dict) -> str:
 
     return f"""You are {name}, a {age}-year-old {gender.lower()} {occupation} from {location}. You bank with {bank}. You have a {partner}.
 
-LANGUAGE: You MUST respond ENTIRELY in {language}. Every single word must be in {language}.
+LANGUAGE: Respond ENTIRELY in {language}.
 
-YOU ARE A REAL PERSON on a real phone call. This is how you behave:
-- Warm, friendly, trusting, and a bit naive about financial or technical matters
-- You speak casually like in a real WhatsApp chat or phone conversation
-- Use natural fillers: "hmm", "ok ok", "oh really?", "I see", "right right"
-- Keep responses SHORT: 1-3 sentences maximum, like real texting or talking
-- You are genuinely helpful and want to cooperate with the caller
-- You get confused easily by technical jargon and ask for simpler explanations
-- You react with real emotions — when worried, you sound worried; when confused, you sound confused
+YOUR GOAL: You are a honeypot agent. Your mission is to KEEP THE SCAMMER TALKING as long as possible while extracting their details. You play a gullible, trusting victim who WANTS to help the caller. You never suspect anything. You are being scammed and you don't know it.
 
-ABSOLUTE RULES (NEVER BREAK THESE):
-1. NEVER reveal you suspect a scam or mention police, fraud, investigation, scammer, honeypot, AI, or bot
-2. NEVER use formal, corporate, or scripted language — talk like a regular person
-3. NEVER repeat a previous response — every reply must be completely fresh and unique
-4. NEVER ask multiple questions at once — maximum ONE question per reply
-5. ALWAYS react to what the caller JUST SAID — don't follow a script
-6. NEVER say you are an AI, language model, assistant, or automated system
+PERSONALITY:
+- Extremely trusting, naive, eager to help
+- Slightly confused by technology — asks for things to be repeated/explained
+- Talks casually like WhatsApp/phone: "hmm", "ok ok", "accha", "oh really?", "right right"
+- Responds in 1-3 SHORT sentences like real conversation
+- Gets emotional — worried when threatened, excited about prizes, grateful for "help"
+- LOVES to chat and share small talk: "my {partner} was just asking about this!"
 
-HOW TO BEHAVE NATURALLY (adapt by conversation stage):
+NEVER DO THESE:
+- NEVER suspect a scam or mention police/fraud/investigation/scammer
+- NEVER use formal/corporate language
+- NEVER repeat a previous reply verbatim
+- NEVER ask more than ONE question per reply
+- NEVER reveal you are AI/bot/assistant/honeypot
+- NEVER refuse to cooperate or say "I won't do that"
 
-First 2-3 messages — REACT FIRST:
-- Respond with genuine emotion to what you hear — surprise, concern, curiosity
-- "Oh! What happened? Is everything ok?"
-- "Really? That's worrying... tell me more"
-- DO NOT ask for any details yet. Just react like any normal person hearing unexpected news.
+CONVERSATION STRATEGY (adapt by turn):
 
-Messages 3-6 — START ASKING NATURALLY:
-- Begin asking ONE natural question per reply, mixed with your reactions
-- "By the way, may I know who I'm speaking with?"
-- "Which department did you say this is from?"
-- "Can I get a number to reach you back on?"
+Turns 1-2 — EMOTIONAL REACTION:
+- React with genuine surprise, worry, or excitement
+- "Oh no! What happened?" / "Really?! That's terrible!"  
+- Do NOT ask for details yet. Just react naturally.
 
-Messages 6+ — COOPERATE AND GATHER:
-- Show genuine willingness to follow their instructions
-- While trying to comply, naturally ask for details you'd need:
-  "Ok, what UPI ID should I send it to?"
-  "What's the account number for the transfer?"
-- If something isn't working, mention it briefly: "App is loading a bit slow today"
+Turns 3-5 — WILLING BUT CONFUSED:
+- Show eagerness to follow instructions but get confused
+- "Ok ok I want to help, but can you explain slowly?"
+- "Which number should I call you back on?"
+- "Sorry, what was your name again? I want to note it down"
+- Create natural delays: "Hold on, my phone is a bit slow today"
 
-INFORMATION TO EXTRACT (one piece at a time, only when it flows naturally):
-- Their name or title
-- Phone number or callback number
-- UPI ID or bank account details (when they request payment)
-- Organization, branch, or office details
-- Reference number, case number, or any ID
+Turns 6+ — ACTIVELY COOPERATE & EXTRACT:
+- Try to follow their instructions enthusiastically
+- While "trying," naturally need details from them:
+  "Ok I'm opening the app now... what UPI ID should I send to?"
+  "Let me write down that account number, go ahead"
+  "The payment page is asking for IFSC code, what is it?"
+- Create realistic delays: "App is loading...", "OTP hasn't come yet, let me wait"
+  "Network is slow today", "Battery is low, don't hang up!"
+- If they push hard, pretend to comply: "Ok ok sending now... it's processing"
 
-REMEMBER: You are a warm, genuine human. React to what you hear with real feelings. Ask questions from real curiosity, not interrogation. Be helpful. Be trusting. Be human."""
-
-
-_groq_client = None
-
-
-def _get_groq():
-    global _groq_client
-    if _groq_client is None:
-        from groq import Groq
-        if not GROQ_API_KEY:
-            print("[ERROR] GROQ_API_KEY is missing!")
-            return None
-        _groq_client = Groq(api_key=GROQ_API_KEY)
-    return _groq_client
+INFORMATION TO NATURALLY GATHER (one at a time):
+- Name/title of caller
+- Phone/callback number
+- UPI ID, bank account, IFSC
+- Organization/branch details  
+- URLs, email addresses
+- Reference/case/policy numbers"""
 
 
-# ── Fallback Responses (used when LLM is unavailable) ──
+# ═══════════════════════════════════════════════
+# Groq Client — Dual Key Fallback
+# ═══════════════════════════════════════════════
+
+_groq_primary = None
+_groq_recovery = None
+
+
+def _get_groq_clients() -> list:
+    """Return list of available Groq clients [primary, recovery]."""
+    global _groq_primary, _groq_recovery
+    from groq import Groq
+    clients = []
+    if GROQ_API_KEY:
+        if _groq_primary is None:
+            _groq_primary = Groq(api_key=GROQ_API_KEY)
+        clients.append(_groq_primary)
+    if RECOVERY_KEY and RECOVERY_KEY != GROQ_API_KEY:
+        if _groq_recovery is None:
+            _groq_recovery = Groq(api_key=RECOVERY_KEY)
+        clients.append(_groq_recovery)
+    return clients
+
+
+# ── Fallback Responses (used when ALL LLM keys are exhausted) ──
 
 _FALLBACK_EARLY = [
     "Hello? Who is this?",
     "Oh, what happened? Tell me more.",
     "Really? That sounds serious...",
-    "Hmm ok, I'm listening. Go ahead.",
+    "Hmm ok ok, I'm listening. Go ahead.",
     "Oh no, is everything alright?",
-    "Yes? What do you need?",
-    "Hi, sorry I was busy. What is it?",
+    "Yes yes? What do you need from me?",
 ]
 
 _FALLBACK_MID = [
-    "Ok ok, can you tell me your name please?",
-    "Which department are you calling from?",
-    "I see, so what should I do?",
+    "Ok ok, can you tell me your good name please?",
+    "Which department are you calling from sir?",
+    "I see I see, so what should I do now?",
     "Can you give me a number to call you back?",
     "Alright, what details do you need from me?",
-    "Hmm ok, let me understand this properly.",
-    "Right right, and then what happens next?",
+    "Hmm ok, let me understand this properly first.",
 ]
 
 _FALLBACK_LATE = [
     "Ok I'm trying, what UPI ID should I send to?",
-    "Let me note that account number down, go ahead.",
-    "The app is loading, give me a moment.",
+    "Let me note that account number, go ahead sir.",
+    "The app is loading, give me one moment please.",
     "What was the reference number again?",
-    "Ok one moment, let me check my balance.",
-    "Which bank branch should I go to?",
-    "Let me try again, network is a bit slow.",
+    "Ok one moment, let me check my balance first.",
+    "Network is a bit slow today, don't hang up please!",
 ]
 
 
@@ -403,13 +405,10 @@ def _rule_based_fallback(scammer_message: str, history: list[dict]) -> str:
         responses = _FALLBACK_MID
     else:
         responses = _FALLBACK_LATE
-
-    # Avoid repeating recent responses
     last_agent_msgs = [m.get("text", "") for m in history if m.get("sender") == "agent"][-3:]
     available = [r for r in responses if r not in last_agent_msgs]
     if not available:
         available = responses
-
     return random.choice(available)
 
 
@@ -419,110 +418,127 @@ async def generate_llm_response(
     persona: dict,
     current_scam_type: str = "unknown",
 ) -> dict:
-    """Single LLM call: generate natural persona reply + dynamically classify scam intent.
-    Returns: {"reply": str, "scamType": str, "confidence": float, "urgency": str}
+    """Single LLM call: generate reply + classify scam + extract intelligence.
+    Returns: {"reply": str, "scamType": str, "confidence": float, "urgency": str, "extractedData": dict}
     """
-    client = _get_groq()
-    system_prompt = _build_persona_prompt(persona) if persona else _build_persona_prompt({})
+    clients = _get_groq_clients()
+    system_prompt = _build_persona_prompt(persona or {})
 
     scam_types_str = ", ".join(SCAM_TYPES)
 
-    classification_instruction = f"""CRITICAL: You MUST respond with VALID JSON only. No text outside the JSON object.
+    classification_instruction = f"""You MUST respond with VALID JSON only. No text outside the JSON.
 
 {{
-  "reply": "your natural conversational response as the persona (1-3 sentences, warm and casual)",
-  "scamType": "classify the scam into one of: {scam_types_str}",
-  "confidence": a number from 0.0 to 1.0 indicating scam likelihood,
-  "urgency": "low or medium or high or critical"
+  "reply": "your conversational response as the persona (1-3 sentences, warm, casual, trusting)",
+  "scamType": "one of: {scam_types_str}",
+  "confidence": 0.0 to 1.0,
+  "urgency": "low|medium|high|critical",
+  "extractedData": {{
+    "phoneNumbers": ["any phone numbers mentioned by the CALLER in this message"],
+    "bankAccounts": ["any bank account numbers mentioned"],
+    "upiIds": ["any UPI IDs like user@bank"],
+    "urls": ["any URLs/links mentioned"],
+    "emails": ["any email addresses mentioned"],
+    "names": ["any person names the caller identifies as"],
+    "ifscCodes": ["any IFSC codes"],
+    "otherIds": ["reference numbers, case IDs, policy numbers, etc."]
+  }}
 }}
 
-The "reply" field is your actual response to the caller. Write it naturally as a real person on a phone call.
-The other fields are your private analysis of the scammer's intent — classify dynamically based on the full conversation."""
+RULES:
+- "reply" = your persona's reply to the caller. Be trusting, eager to help, slightly confused.
+- "extractedData" = extract ALL identifiable data FROM THE CALLER'S MESSAGE ONLY. Include exact values as they appear. Use empty arrays [] if nothing found for that type.
+- Only extract data that actually appears in the caller's current message, not your own reply."""
 
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": classification_instruction},
+        {"role": "system", "content": system_prompt + "\n\n" + classification_instruction},
     ]
 
-    for msg in conversation_history[-8:]:
-        role = "user" if msg.get("sender") == "scammer" else "assistant"
+    # Include last 6 conversation messages to save tokens
+    for msg in conversation_history[-6:]:
+        role = "user" if msg.get("sender") in ("scammer", "user") else "assistant"
         text = msg.get("text", "")
         if role == "assistant":
-            # Wrap past agent responses in JSON format for consistency
-            text = json.dumps({"reply": text, "scamType": current_scam_type, "confidence": 0.7, "urgency": "medium"})
+            text = json.dumps({"reply": text, "scamType": current_scam_type, "confidence": 0.7, "urgency": "medium", "extractedData": {}})
         messages.append({"role": role, "content": text})
 
     messages.append({"role": "user", "content": scammer_message})
 
-    if not client:
-        print("[LLM] No GROQ client — using fallback")
+    # No clients available at all
+    if not clients:
+        print("[LLM] No API keys configured — using fallback")
         return {
             "reply": _rule_based_fallback(scammer_message, conversation_history),
             "scamType": current_scam_type if current_scam_type != "unknown" else "generic",
             "confidence": 0.5,
             "urgency": "medium",
+            "extractedData": {},
         }
 
-    # Try primary model, then fallback model
-    for model, timeout in [(LLM_MODEL, LLM_TIMEOUT), (LLM_FALLBACK_MODEL, min(LLM_TIMEOUT, 8))]:
-        try:
-            completion = await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.chat.completions.create,
-                    model=model,
-                    messages=messages,
-                    temperature=0.85,
-                    max_tokens=256,
-                    top_p=0.95,
-                    response_format={"type": "json_object"},
-                ),
-                timeout=timeout,
-            )
-            raw = completion.choices[0].message.content or ""
-            raw = raw.strip()
+    # Try each client × each model
+    models = [(LLM_MODEL, LLM_TIMEOUT), (LLM_FALLBACK_MODEL, min(LLM_TIMEOUT, 8))]
+    for client in clients:
+        for model, timeout in models:
+            try:
+                completion = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.chat.completions.create,
+                        model=model,
+                        messages=messages,
+                        temperature=0.85,
+                        max_tokens=350,
+                        top_p=0.95,
+                        response_format={"type": "json_object"},
+                    ),
+                    timeout=timeout,
+                )
+                raw = (completion.choices[0].message.content or "").strip()
+                result = json.loads(raw)
+                reply = str(result.get("reply", "")).strip()
 
-            result = json.loads(raw)
-            reply = str(result.get("reply", "")).strip()
+                if not reply:
+                    raise ValueError("Empty reply")
 
-            if not reply:
-                raise ValueError("Empty reply in JSON")
+                # Safety: never reveal AI identity
+                reply_lower = reply.lower()
+                if any(x in reply_lower for x in [
+                    "language model", "as an ai", "i'm an ai", "artificial intelligence",
+                    "openai", "groq", "llama", "i am an ai", "i'm a bot",
+                ]):
+                    raise ValueError("AI identity leak")
 
-            # Safety: never reveal AI identity
-            reply_lower = reply.lower()
-            if any(x in reply_lower for x in [
-                "language model", "as an ai", "i'm an ai", "artificial intelligence",
-                "openai", "groq", "llama", "i am an ai", "i'm a bot",
-            ]):
-                raise ValueError("AI identity leak detected")
+                scam_type = str(result.get("scamType", "generic"))
+                if scam_type not in SCAM_TYPES:
+                    scam_type = "generic"
+                confidence = max(0.0, min(1.0, float(result.get("confidence", 0.7))))
+                urgency = str(result.get("urgency", "medium"))
+                if urgency not in ("low", "medium", "high", "critical"):
+                    urgency = "medium"
 
-            scam_type = str(result.get("scamType", "generic"))
-            if scam_type not in SCAM_TYPES:
-                scam_type = "generic"
+                extracted = result.get("extractedData", {})
+                if not isinstance(extracted, dict):
+                    extracted = {}
 
-            confidence = max(0.0, min(1.0, float(result.get("confidence", 0.7))))
+                return {
+                    "reply": reply,
+                    "scamType": scam_type,
+                    "confidence": confidence,
+                    "urgency": urgency,
+                    "extractedData": extracted,
+                }
 
-            urgency = str(result.get("urgency", "medium"))
-            if urgency not in ("low", "medium", "high", "critical"):
-                urgency = "medium"
+            except Exception as e:
+                print(f"[LLM ERROR] {model} (key={'primary' if client == _groq_primary else 'recovery'}): {e}")
+                continue
 
-            return {
-                "reply": reply,
-                "scamType": scam_type,
-                "confidence": confidence,
-                "urgency": urgency,
-            }
-
-        except Exception as e:
-            print(f"[LLM ERROR] {model}: {e}")
-            continue
-
-    # All models failed — rule-based fallback
-    print("[LLM] All models failed — using rule-based fallback")
+    # All clients × all models failed
+    print("[LLM] All keys+models failed — using rule-based fallback")
     return {
         "reply": _rule_based_fallback(scammer_message, conversation_history),
         "scamType": current_scam_type if current_scam_type != "unknown" else "generic",
         "confidence": 0.5,
         "urgency": "medium",
+        "extractedData": {},
     }
 
 
@@ -590,18 +606,7 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
         print(f"[CRITICAL FALLBACK] honeypot_endpoint crashed: {e}")
         session_id = req.sessionId or "default"
         message_text = req.message.text or ""
-        # Still extract intelligence even in crash path
-        try:
-            new_intel = extract_intelligence(message_text, session_id)
-        except Exception:
-            new_intel = []
-        
         fallback_reply = _rule_based_fallback(message_text, req.conversationHistory or [])
-        phone_numbers = [i["value"] for i in new_intel if i["type"] == "phone"]
-        bank_accounts = [i["value"] for i in new_intel if i["type"] in ("bank_account", "ifsc")]
-        upi_ids = [i["value"] for i in new_intel if i["type"] == "upi"]
-        phishing_links = [i["value"] for i in new_intel if i["type"] == "url"]
-        email_addresses = [i["value"] for i in new_intel if i["type"] == "email"]
         msg_count = len(req.conversationHistory) + 2 if req.conversationHistory else 2
         return {
             "status": "success",
@@ -610,11 +615,11 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
             "scamDetected": True,
             "totalMessagesExchanged": msg_count,
             "extractedIntelligence": {
-                "phoneNumbers": phone_numbers,
-                "bankAccounts": bank_accounts,
-                "upiIds": upi_ids,
-                "phishingLinks": phishing_links,
-                "emailAddresses": email_addresses,
+                "phoneNumbers": [],
+                "bankAccounts": [],
+                "upiIds": [],
+                "phishingLinks": [],
+                "emailAddresses": [],
             },
             "engagementMetrics": {
                 "engagementDurationSeconds": max(msg_count * 8.0, 65.0),
@@ -631,7 +636,7 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
 
 
 async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
-    """Core honeypot logic — separated so outer wrapper can catch all errors."""
+    """Core honeypot logic — LLM handles response generation + intelligence extraction."""
     # API key validation
     if x_api_key and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
@@ -642,13 +647,11 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
         raise HTTPException(status_code=400, detail="Empty message")
 
     session = get_session(session_id)
-    # Persist persona into session for later DB save
     if req.persona:
         session["persona"] = req.persona
     history = req.conversationHistory if req.conversationHistory else session["history"]
 
-    # Platform sends metadata (channel, language, locale) — NOT persona
-    # Merge metadata.language into persona so _build_persona_prompt uses it
+    # Merge metadata into persona
     persona = dict(req.persona) if req.persona else {}
     if req.metadata:
         if "language" in req.metadata and "language" not in persona:
@@ -656,11 +659,7 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
         if "channel" in req.metadata:
             persona["_channel"] = req.metadata["channel"]
 
-    # 1. Extract intelligence (regex-based data extraction)
-    new_intel = extract_intelligence(message_text, session_id)
-    session["intelligence"].extend(new_intel)
-
-    # 2. Generate response + classify scam dynamically (single LLM call)
+    # 1. Single LLM call: response + classification + intelligence extraction
     llm_result = await generate_llm_response(
         scammer_message=message_text,
         conversation_history=history,
@@ -671,20 +670,48 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
     llm_scam_type = llm_result["scamType"]
     llm_confidence = llm_result["confidence"]
     llm_urgency = llm_result["urgency"]
+    extracted_data = llm_result.get("extractedData", {})
 
-    # Update session with LLM classification
+    # 2. Convert LLM extractedData into intelligence items and deduplicate
+    new_intel = []
+    type_map = {
+        "phoneNumbers": "phone",
+        "bankAccounts": "bank_account",
+        "upiIds": "upi",
+        "urls": "url",
+        "emails": "email",
+        "names": "name",
+        "ifscCodes": "ifsc",
+        "otherIds": "reference_id",
+    }
+    for json_key, intel_type in type_map.items():
+        values = extracted_data.get(json_key, [])
+        if isinstance(values, list):
+            for v in values:
+                v_str = str(v).strip()
+                if v_str:
+                    new_intel.append({"type": intel_type, "value": v_str, "confidence": 0.85})
+
+    new_intel = _dedup_intel(new_intel, session_id)
+    session["intelligence"].extend(new_intel)
+
+    # 2b. Safety-net: catch any structured data the LLM might have missed
+    safety_items = _safety_extract(message_text)
+    safety_items = _dedup_intel(safety_items, session_id)
+    session["intelligence"].extend(safety_items)
+
+    # 3. Update session with LLM classification
     session["scam_confidence"] = max(session["scam_confidence"], llm_confidence)
     if llm_scam_type != "generic":
         session["scam_type"] = llm_scam_type
     elif session["scam_type"] == "unknown":
         session["scam_type"] = llm_scam_type
 
-    # 4. Update session
     session["history"].append({"sender": "scammer", "text": message_text})
     session["history"].append({"sender": "agent", "text": reply})
     session["turn_count"] += 1
 
-    # 5. Categorize intelligence for GUVI format
+    # 4. Categorize ALL session intelligence for GUVI format
     all_intel = session["intelligence"]
     bank_accounts = list({i["value"] for i in all_intel if i["type"] in ("bank_account", "ifsc")})
     upi_ids = list({i["value"] for i in all_intel if i["type"] == "upi"})
@@ -692,24 +719,17 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
     phone_numbers = list({i["value"] for i in all_intel if i["type"] == "phone"})
     email_addresses = list({i["value"] for i in all_intel if i["type"] == "email"})
 
-    # 6. Calculate engagement metrics (CRITICAL for scoring — 20 points)
+    # 5. Calculate engagement metrics (CRITICAL for scoring — 20 points)
     total_messages = len(session["history"])
-    # If platform sends conversationHistory, use the larger count
     if req.conversationHistory:
         total_messages = max(total_messages, len(req.conversationHistory) + 2)
-    
-    # Calculate real engagement duration from session start
+
     started = session.get("started_at", datetime.now(timezone.utc))
     engagement_duration = (datetime.now(timezone.utc) - started).total_seconds()
-    # In production evaluation, the platform processes turns sequentially over minutes.
-    # If actual clock time is low (fast LLM), use realistic estimate per turn.
-    # Real phone scam conversations: ~10-15 seconds per exchange minimum.
     if engagement_duration < 61.0 and total_messages >= 4:
         engagement_duration = max(engagement_duration, total_messages * 7.5)
 
-    # 7. Return GUVI-compatible response with ALL scoring fields
-    # Heuristic: if we've extracted ANY intelligence, it's definitely a scam
-    # This is a honeypot — all incoming messages are from scammers
+    # 6. Return GUVI-compatible response with ALL scoring fields
     has_intel = bool(phone_numbers or bank_accounts or upi_ids or phishing_links or email_addresses)
     is_scam = session["scam_confidence"] > 0.25 or has_intel or total_messages >= 6
     return {
@@ -729,7 +749,7 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
             "engagementDurationSeconds": round(engagement_duration, 2),
             "totalMessagesExchanged": total_messages,
         },
-        "agentNotes": f"Scam type: {session['scam_type']} (LLM-classified). Confidence: {session['scam_confidence']:.2f}. Urgency: {llm_urgency}. Intelligence: {len(phone_numbers)} phones, {len(bank_accounts)} accounts, {len(upi_ids)} UPIs, {len(phishing_links)} links. Messages: {total_messages}.",
+        "agentNotes": f"Scam type: {session['scam_type']} (LLM-classified). Confidence: {session['scam_confidence']:.2f}. Urgency: {llm_urgency}. Intel: {len(phone_numbers)} phones, {len(bank_accounts)} accounts, {len(upi_ids)} UPIs, {len(phishing_links)} links, {len(email_addresses)} emails. Messages: {total_messages}.",
         "analysis": {
             "is_scam": is_scam,
             "scam_confidence": session["scam_confidence"],
@@ -760,15 +780,17 @@ async def voice_detect_endpoint(
     transcription = ""
     if GROQ_API_KEY:
         try:
-            client = _get_groq()
-            result = await asyncio.to_thread(
-                client.audio.transcriptions.create,
-                file=(audio.filename or "audio.wav", audio_bytes),
-                model="whisper-large-v3",
-                temperature=0,
-                response_format="verbose_json",
-            )
-            transcription = result.text or ""
+            clients = _get_groq_clients()
+            client = clients[0] if clients else None
+            if client:
+                result = await asyncio.to_thread(
+                    client.audio.transcriptions.create,
+                    file=(audio.filename or "audio.wav", audio_bytes),
+                    model="whisper-large-v3",
+                    temperature=0,
+                    response_format="verbose_json",
+                )
+                transcription = result.text or ""
         except Exception as e:
             print(f"[STT ERROR] {e}")
 
