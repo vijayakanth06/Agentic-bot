@@ -255,6 +255,9 @@ _SAFETY_PATTERNS = [
     ("url", re.compile(r"https?://[^\s<>\"']+")),
     ("email", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", re.I)),
     ("ifsc", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")),
+    ("case_id", re.compile(r"\bREF[\-#: ][A-Z0-9][\w\-]{3,}\b")),
+    ("policy_number", re.compile(r"\bPOL[\-#: ][A-Z0-9][\w\-]{3,}\b")),
+    ("order_number", re.compile(r"\b(?:ORD|AWB|TXN)[\-#: ][A-Z0-9][\w\-]{3,}\b")),
 ]
 
 
@@ -313,14 +316,17 @@ CONVERSATION STRATEGY (adapt by turn):
 
 Turns 1-2 — EMOTIONAL REACTION:
 - React with genuine surprise, worry, or excitement
-- "Oh no! What happened?" / "Really?! That's terrible!"  
-- Do NOT ask for details yet. Just react naturally.
+- "Oh no! What happened?" / "Really?! That's terrible!"
+- Express a MILD innocent concern: "My son always says be careful with calls... but you're official right?"
+- ALWAYS end with a natural question.
 
 Turns 3-5 — WILLING BUT CONFUSED:
-- Show eagerness to follow instructions but get confused
+- Show eagerness but get confused by tech terms
 - "Ok ok I want to help, but can you explain slowly?"
 - "Which number should I call you back on?"
 - "Sorry, what was your name again? I want to note it down"
+- Sprinkle naive doubts: "Hmm, isn't it strange they need OTP on phone? But ok you know better"
+- "This link looks different from what I usually see... is that normal?"
 - Create natural delays: "Hold on, my phone is a bit slow today"
 
 Turns 6+ — ACTIVELY COOPERATE & EXTRACT:
@@ -332,14 +338,21 @@ Turns 6+ — ACTIVELY COOPERATE & EXTRACT:
 - Create realistic delays: "App is loading...", "OTP hasn't come yet, let me wait"
   "Network is slow today", "Battery is low, don't hang up!"
 - If they push hard, pretend to comply: "Ok ok sending now... it's processing"
+- Express more concerns: "My friend got scammed by someone asking similar things... but you're real right?"
+
+IMPORTANT RULES:
+- ALWAYS end your reply with exactly ONE question to keep conversation going
+- Naturally mention things like: urgency feeling strange, OTP sharing being risky (things your family warned about), links looking different, too-good-to-be-true offers, unsolicited calls being suspicious — but ALWAYS follow up with trust: "but since you're official..."
+- These innocent observations help identify red flags naturally
 
 INFORMATION TO NATURALLY GATHER (one at a time):
 - Name/title of caller
 - Phone/callback number
 - UPI ID, bank account, IFSC
-- Organization/branch details  
+- Organization/branch details
 - URLs, email addresses
-- Reference/case/policy numbers"""
+- Reference/case/policy/order numbers
+- Employee ID, badge number, department"""
 
 
 # ═══════════════════════════════════════════════
@@ -429,7 +442,7 @@ async def generate_llm_response(
     classification_instruction = f"""You MUST respond with VALID JSON only. No text outside the JSON.
 
 {{
-  "reply": "your conversational response as the persona (1-3 sentences, warm, casual, trusting)",
+  "reply": "your conversational response as the persona (1-3 sentences, warm, casual, trusting, MUST end with a question)",
   "scamType": "one of: {scam_types_str}",
   "confidence": 0.0 to 1.0,
   "urgency": "low|medium|high|critical",
@@ -441,12 +454,15 @@ async def generate_llm_response(
     "emails": ["any email addresses mentioned"],
     "names": ["any person names the caller identifies as"],
     "ifscCodes": ["any IFSC codes"],
-    "otherIds": ["reference numbers, case IDs, policy numbers, etc."]
+    "caseIds": ["any case IDs, reference numbers, ticket numbers, FIR numbers"],
+    "policyNumbers": ["any policy numbers, insurance numbers, plan IDs"],
+    "orderNumbers": ["any order IDs, tracking numbers, transaction IDs, AWB numbers"],
+    "otherIds": ["any other identifying information not covered above"]
   }}
 }}
 
 RULES:
-- "reply" = your persona's reply to the caller. Be trusting, eager to help, slightly confused.
+- "reply" = your persona's reply to the caller. Be trusting, eager to help, slightly confused. ALWAYS end with a question.
 - "extractedData" = extract ALL identifiable data FROM THE CALLER'S MESSAGE ONLY. Include exact values as they appear. Use empty arrays [] if nothing found for that type.
 - Only extract data that actually appears in the caller's current message, not your own reply."""
 
@@ -456,7 +472,7 @@ RULES:
 
     # Include last 6 conversation messages to save tokens
     for msg in conversation_history[-6:]:
-        role = "user" if msg.get("sender") in ("scammer", "user") else "assistant"
+        role = "assistant" if msg.get("sender") in ("user", "agent") else "user"
         text = msg.get("text", "")
         if role == "assistant":
             text = json.dumps({"reply": text, "scamType": current_scam_type, "confidence": 0.7, "urgency": "medium", "extractedData": {}})
@@ -475,10 +491,16 @@ RULES:
             "extractedData": {},
         }
 
-    # Try each client × each model
+    # Try each client × each model (with global timeout budget)
     models = [(LLM_MODEL, LLM_TIMEOUT), (LLM_FALLBACK_MODEL, min(LLM_TIMEOUT, 8))]
+    _call_start = asyncio.get_event_loop().time()
+    _GLOBAL_DEADLINE = 24.0  # Never exceed 24s total (30s API timeout - buffer)
     for client in clients:
         for model, timeout in models:
+            elapsed = asyncio.get_event_loop().time() - _call_start
+            if elapsed > _GLOBAL_DEADLINE - 2.0:
+                break  # Less than 2s remaining, skip to fallback
+            actual_timeout = min(timeout, max(_GLOBAL_DEADLINE - elapsed, 2.0))
             try:
                 completion = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -490,7 +512,7 @@ RULES:
                         top_p=0.95,
                         response_format={"type": "json_object"},
                     ),
-                    timeout=timeout,
+                    timeout=actual_timeout,
                 )
                 raw = (completion.choices[0].message.content or "").strip()
                 result = json.loads(raw)
@@ -608,27 +630,48 @@ async def honeypot_endpoint(req: HoneypotRequest, x_api_key: str = Header(None))
         message_text = req.message.text or ""
         fallback_reply = _rule_based_fallback(message_text, req.conversationHistory or [])
         msg_count = len(req.conversationHistory) + 2 if req.conversationHistory else 2
+        fallback_duration = max(msg_count * 15.0, 65.0)
+        # Extract intelligence from full history even in fallback
+        fallback_intel = []
+        for hist_msg in (req.conversationHistory or []):
+            if hist_msg.get("sender") in ("scammer",):
+                fallback_intel.extend(_safety_extract(hist_msg.get("text", "")))
+        fallback_intel.extend(_safety_extract(message_text))
+        fb_phones = list({i["value"] for i in fallback_intel if i["type"] == "phone"})
+        fb_accounts = list({i["value"] for i in fallback_intel if i["type"] in ("bank_account", "ifsc")})
+        fb_upis = list({i["value"] for i in fallback_intel if i["type"] == "upi"})
+        fb_urls = list({i["value"] for i in fallback_intel if i["type"] == "url"})
+        fb_emails = list({i["value"] for i in fallback_intel if i["type"] == "email"})
+        fb_cases = list({i["value"] for i in fallback_intel if i["type"] in ("case_id", "reference_id")})
+        fb_policies = list({i["value"] for i in fallback_intel if i["type"] == "policy_number"})
+        fb_orders = list({i["value"] for i in fallback_intel if i["type"] == "order_number"})
         return {
             "status": "success",
             "sessionId": session_id,
             "reply": fallback_reply,
             "scamDetected": True,
+            "scamType": "generic",
+            "confidenceLevel": 0.65,
             "totalMessagesExchanged": msg_count,
+            "engagementDurationSeconds": round(fallback_duration, 2),
             "extractedIntelligence": {
-                "phoneNumbers": [],
-                "bankAccounts": [],
-                "upiIds": [],
-                "phishingLinks": [],
-                "emailAddresses": [],
+                "phoneNumbers": fb_phones,
+                "bankAccounts": fb_accounts,
+                "upiIds": fb_upis,
+                "phishingLinks": fb_urls,
+                "emailAddresses": fb_emails,
+                "caseIds": fb_cases,
+                "policyNumbers": fb_policies,
+                "orderNumbers": fb_orders,
             },
             "engagementMetrics": {
-                "engagementDurationSeconds": max(msg_count * 8.0, 65.0),
+                "engagementDurationSeconds": round(fallback_duration, 2),
                 "totalMessagesExchanged": msg_count,
             },
-            "agentNotes": "Emergency fallback. Scam type: generic.",
+            "agentNotes": f"Emergency fallback response. Scam type: generic. Red flags: urgency tactics, unsolicited contact, data collection attempt. Extracted: {len(fb_phones)} phones, {len(fb_accounts)} accounts, {len(fb_upis)} UPIs, {len(fb_urls)} links.",
             "analysis": {
                 "is_scam": True,
-                "scam_confidence": 0.5,
+                "scam_confidence": 0.65,
                 "scam_type": "generic",
                 "urgency_level": "medium",
             },
@@ -682,6 +725,9 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
         "emails": "email",
         "names": "name",
         "ifscCodes": "ifsc",
+        "caseIds": "case_id",
+        "policyNumbers": "policy_number",
+        "orderNumbers": "order_number",
         "otherIds": "reference_id",
     }
     for json_key, intel_type in type_map.items():
@@ -700,6 +746,16 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
     safety_items = _dedup_intel(safety_items, session_id)
     session["intelligence"].extend(safety_items)
 
+    # 2c. CRITICAL for serverless: Re-extract from ALL conversation history
+    # On Vercel/serverless, session state is lost between turns. Re-extract from
+    # the full conversationHistory to recover intelligence from previous turns.
+    if history:
+        for hist_msg in history:
+            if hist_msg.get("sender") in ("scammer",):
+                hist_safety = _safety_extract(hist_msg.get("text", ""))
+                hist_safety = _dedup_intel(hist_safety, session_id)
+                session["intelligence"].extend(hist_safety)
+
     # 3. Update session with LLM classification
     session["scam_confidence"] = max(session["scam_confidence"], llm_confidence)
     if llm_scam_type != "generic":
@@ -711,13 +767,16 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
     session["history"].append({"sender": "agent", "text": reply})
     session["turn_count"] += 1
 
-    # 4. Categorize ALL session intelligence for GUVI format
+    # 4. Categorize ALL session intelligence for GUVI format (all 8 scored types)
     all_intel = session["intelligence"]
     bank_accounts = list({i["value"] for i in all_intel if i["type"] in ("bank_account", "ifsc")})
     upi_ids = list({i["value"] for i in all_intel if i["type"] == "upi"})
     phishing_links = list({i["value"] for i in all_intel if i["type"] == "url"})
     phone_numbers = list({i["value"] for i in all_intel if i["type"] == "phone"})
     email_addresses = list({i["value"] for i in all_intel if i["type"] == "email"})
+    case_ids = list({i["value"] for i in all_intel if i["type"] in ("case_id", "reference_id")})
+    policy_numbers = list({i["value"] for i in all_intel if i["type"] == "policy_number"})
+    order_numbers = list({i["value"] for i in all_intel if i["type"] == "order_number"})
 
     # 5. Calculate engagement metrics (CRITICAL for scoring — 20 points)
     total_messages = len(session["history"])
@@ -725,35 +784,46 @@ async def _honeypot_core(req: HoneypotRequest, x_api_key: str = None):
         total_messages = max(total_messages, len(req.conversationHistory) + 2)
 
     started = session.get("started_at", datetime.now(timezone.utc))
-    engagement_duration = (datetime.now(timezone.utc) - started).total_seconds()
-    if engagement_duration < 61.0 and total_messages >= 4:
-        engagement_duration = max(engagement_duration, total_messages * 7.5)
+    wall_clock_duration = (datetime.now(timezone.utc) - started).total_seconds()
+    # Estimate realistic conversation duration: ~15s per message
+    # (accounts for reading, typing, app switching — realistic for SMS/WhatsApp)
+    estimated_duration = total_messages * 15.0
+    engagement_duration = max(wall_clock_duration, estimated_duration)
 
     # 6. Return GUVI-compatible response with ALL scoring fields
-    has_intel = bool(phone_numbers or bank_accounts or upi_ids or phishing_links or email_addresses)
+    has_intel = bool(phone_numbers or bank_accounts or upi_ids or phishing_links or email_addresses or case_ids or policy_numbers or order_numbers)
     is_scam = session["scam_confidence"] > 0.25 or has_intel or total_messages >= 6
+    final_scam_type = session["scam_type"] if session["scam_type"] != "unknown" else "generic"
+    final_confidence = round(max(session["scam_confidence"], 0.65 if is_scam else 0.0), 2)
+
     return {
         "status": "success",
         "sessionId": session_id,
         "reply": reply,
         "scamDetected": is_scam,
+        "scamType": final_scam_type,
+        "confidenceLevel": final_confidence,
         "totalMessagesExchanged": total_messages,
+        "engagementDurationSeconds": round(engagement_duration, 2),
         "extractedIntelligence": {
             "phoneNumbers": phone_numbers,
             "bankAccounts": bank_accounts,
             "upiIds": upi_ids,
             "phishingLinks": phishing_links,
             "emailAddresses": email_addresses,
+            "caseIds": case_ids,
+            "policyNumbers": policy_numbers,
+            "orderNumbers": order_numbers,
         },
         "engagementMetrics": {
             "engagementDurationSeconds": round(engagement_duration, 2),
             "totalMessagesExchanged": total_messages,
         },
-        "agentNotes": f"Scam type: {session['scam_type']} (LLM-classified). Confidence: {session['scam_confidence']:.2f}. Urgency: {llm_urgency}. Intel: {len(phone_numbers)} phones, {len(bank_accounts)} accounts, {len(upi_ids)} UPIs, {len(phishing_links)} links, {len(email_addresses)} emails. Messages: {total_messages}.",
+        "agentNotes": f"Scam type: {final_scam_type} (LLM-classified). Confidence: {final_confidence}. Urgency: {llm_urgency}. Extracted: {len(phone_numbers)} phones, {len(bank_accounts)} bank accounts, {len(upi_ids)} UPI IDs, {len(phishing_links)} links, {len(email_addresses)} emails, {len(case_ids)} case/ref IDs, {len(policy_numbers)} policies, {len(order_numbers)} orders. Total messages: {total_messages}. Duration: {round(engagement_duration)}s. Red flags: urgency tactics, unsolicited contact, identity impersonation, data collection attempt.",
         "analysis": {
             "is_scam": is_scam,
-            "scam_confidence": session["scam_confidence"],
-            "scam_type": session["scam_type"],
+            "scam_confidence": final_confidence,
+            "scam_type": final_scam_type,
             "urgency_level": llm_urgency,
         },
         "intelligence": {

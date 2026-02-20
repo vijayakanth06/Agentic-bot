@@ -45,6 +45,7 @@ test_report.*
 test_output.txt
 test_results.json
 test_dynamic_results.json
+_*.py
 
 # Logs
 *.log
