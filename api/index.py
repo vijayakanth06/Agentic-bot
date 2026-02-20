@@ -427,37 +427,62 @@ def _get_groq_clients() -> list:
 
 # ── Fallback Responses (used when ALL LLM keys are exhausted) ──
 # ALL responses MUST end with a question mark (?) — scoring requires it.
+# Large pools (12+ each) prevent repetition across 10-turn evaluations.
 
 _FALLBACK_EARLY = [
-    "Hello? Who is this?",
+    "Hello? Who is this calling?",
     "Oh, what happened? Can you tell me more?",
     "Really? That sounds serious, what should I do?",
-    "Hmm ok ok, I'm listening. What happened exactly?",
-    "Oh no, is everything alright?",
-    "Yes yes? What do you need from me?",
+    "Hmm ok ok, I'm listening, what happened exactly?",
+    "Oh no, is everything alright with my account?",
+    "Yes yes, what do you need from me sir?",
+    "Arey, this is very worrying, can you explain properly?",
+    "Oh god, are you sure? What should I do now?",
+    "Wait wait, let me sit down first... what happened to my account?",
+    "My heart is beating fast sir, can you please tell me slowly what happened?",
+    "Is this genuine sir? How do I know you are really calling from the bank?",
+    "Oh no no, I just deposited money yesterday, what went wrong?",
 ]
 
 _FALLBACK_MID = [
     "Ok ok, can you tell me your good name please?",
     "Which department are you calling from sir?",
     "I see I see, so what should I do now?",
-    "Can you give me a number to call you back?",
-    "Alright, what details do you need from me?",
+    "Can you give me a number to call you back on?",
+    "Alright, what details do you need from me exactly?",
     "Hmm ok, can you explain that again slowly?",
+    "One second sir, let me get a pen to write this down, what was your name again?",
+    "My son usually handles these things, should I call him first?",
+    "Ok sir I want to help, but what is your employee ID number?",
+    "I see, and what branch are you calling from exactly?",
+    "Is there an email address I can contact your department at?",
+    "Ok I understand the urgency, but can you tell me your badge number for my records?",
 ]
 
 _FALLBACK_LATE = [
     "Ok I'm trying, what UPI ID should I send to?",
-    "Let me note that account number, what was it again?",
-    "The app is loading... what number should I enter?",
-    "What was the reference number again?",
-    "Ok one moment, which account are you talking about?",
+    "Let me note that account number, can you repeat it once more?",
+    "The app is loading very slowly today, what number should I enter?",
+    "What was the reference number again please?",
+    "Ok one moment sir, which account are you talking about?",
     "Network is slow today, can you repeat that last part?",
+    "I opened my banking app, it's asking for IFSC code, what should I enter?",
+    "Sir the OTP is not coming yet, can you send it again from your side?",
+    "My phone is hanging, let me restart... what was the account number you said?",
+    "Almost done sir, just tell me the exact amount I need to transfer?",
+    "Ok I see a UPI request, but the name looks different, is that your name?",
+    "Accha ok, I'm on the payment page now, which bank should I select?",
+    "One moment, my wife is asking who I'm talking to, what should I tell her?",
+    "Sir I'm getting confused with all these numbers, can you start from the beginning?",
 ]
 
 
 def _rule_based_fallback(scammer_message: str, history: list[dict]) -> str:
-    """Generate a natural response without LLM — ensures the API NEVER fails."""
+    """Generate a contextual response without LLM — ensures the API NEVER fails.
+    
+    Uses conversation phase (early/mid/late) and deduplication against all
+    previous honeypot messages to prevent repetition across turns.
+    """
     turn_count = len([m for m in history if m.get("sender") in ("scammer", "user")])
     if turn_count <= 1:
         responses = _FALLBACK_EARLY
@@ -465,10 +490,21 @@ def _rule_based_fallback(scammer_message: str, history: list[dict]) -> str:
         responses = _FALLBACK_MID
     else:
         responses = _FALLBACK_LATE
-    last_agent_msgs = [m.get("text", "") for m in history if m.get("sender") == "agent"][-3:]
-    available = [r for r in responses if r not in last_agent_msgs]
+
+    # Dedup: collect ALL previous honeypot responses from history
+    # Evaluator uses sender="user" for honeypot, internal uses sender="agent"
+    prev_agent_texts = set(
+        m.get("text", "").strip()
+        for m in history
+        if m.get("sender") in ("agent", "user")
+    )
+    available = [r for r in responses if r not in prev_agent_texts]
     if not available:
-        available = responses
+        # All exhausted — pull from ALL pools to avoid repetition
+        all_responses = _FALLBACK_EARLY + _FALLBACK_MID + _FALLBACK_LATE
+        available = [r for r in all_responses if r not in prev_agent_texts]
+    if not available:
+        available = responses  # absolute last resort
     return random.choice(available)
 
 
@@ -582,67 +618,96 @@ RULES:
             "extractedData": {},
         }
 
-    # Try each client × each model (with global timeout budget)
-    models = [(LLM_MODEL, LLM_TIMEOUT), (LLM_FALLBACK_MODEL, min(LLM_TIMEOUT, 8))]
+    # Build fallback chain optimized for Groq free-tier rate limits:
+    #   llama-3.1-8b-instant  = 14,400 RPD, 6K TPM  (highly available)
+    #   llama-3.3-70b-versatile = 1,000 RPD, 12K TPM (burns out fast)
+    # Strategy: exhaust 8b across ALL keys with retries before touching 70b.
+    # Chain: Key1+8b → Key2+8b → (retry Key1+8b) → Key1+70b → Rule-based
+    fallback_chain = []
+    # Phase 1: 8b model on all keys (most reliable)
+    for client in clients:
+        fallback_chain.append((client, LLM_MODEL, LLM_TIMEOUT))
+    # Phase 2: 8b again on all keys (retry after rate-limit cooldown)
+    for client in clients:
+        fallback_chain.append((client, LLM_MODEL, LLM_TIMEOUT))
+    # Phase 3: 70b as last resort before rule-based (only if time permits)
+    for client in clients:
+        fallback_chain.append((client, LLM_FALLBACK_MODEL, min(LLM_TIMEOUT, 8)))
+
     _call_start = asyncio.get_event_loop().time()
     _GLOBAL_DEADLINE = 24.0  # Never exceed 24s total (30s API timeout - buffer)
-    for client in clients:
-        for model, timeout in models:
-            elapsed = asyncio.get_event_loop().time() - _call_start
-            if elapsed > _GLOBAL_DEADLINE - 2.0:
-                break  # Less than 2s remaining, skip to fallback
-            actual_timeout = min(timeout, max(_GLOBAL_DEADLINE - elapsed, 2.0))
-            try:
-                completion = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        client.chat.completions.create,
-                        model=model,
-                        messages=messages,
-                        temperature=0.85,
-                        max_tokens=250,
-                        top_p=0.95,
-                        response_format={"type": "json_object"},
-                    ),
-                    timeout=actual_timeout,
-                )
-                raw = (completion.choices[0].message.content or "").strip()
-                result = json.loads(raw)
-                reply = str(result.get("reply", "")).strip()
+    _last_429_time = 0.0  # Track when we last hit a rate limit
 
-                if not reply:
-                    raise ValueError("Empty reply")
+    for idx, (client, model, timeout) in enumerate(fallback_chain):
+        elapsed = asyncio.get_event_loop().time() - _call_start
+        if elapsed > _GLOBAL_DEADLINE - 2.0:
+            break  # Less than 2s remaining, skip to rule-based fallback
+        actual_timeout = min(timeout, max(_GLOBAL_DEADLINE - elapsed - 0.5, 2.0))
 
-                # Safety: never reveal AI identity
-                reply_lower = reply.lower()
-                if any(x in reply_lower for x in [
-                    "language model", "as an ai", "i'm an ai", "artificial intelligence",
-                    "openai", "groq", "llama", "i am an ai", "i'm a bot",
-                ]):
-                    raise ValueError("AI identity leak")
+        # If we recently hit 429, wait before retrying (respect rate limit window)
+        time_since_429 = asyncio.get_event_loop().time() - _last_429_time
+        if _last_429_time > 0 and time_since_429 < 1.5:
+            wait_time = min(1.5 - time_since_429, _GLOBAL_DEADLINE - elapsed - 2.0)
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
 
-                scam_type = str(result.get("scamType", "generic"))
-                if scam_type not in SCAM_TYPES:
-                    scam_type = "generic"
-                confidence = max(0.0, min(1.0, float(result.get("confidence", 0.7))))
-                urgency = str(result.get("urgency", "medium"))
-                if urgency not in ("low", "medium", "high", "critical"):
-                    urgency = "medium"
+        try:
+            completion = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.chat.completions.create,
+                    model=model,
+                    messages=messages,
+                    temperature=0.85,
+                    max_tokens=250,
+                    top_p=0.95,
+                    response_format={"type": "json_object"},
+                ),
+                timeout=actual_timeout,
+            )
+            raw = (completion.choices[0].message.content or "").strip()
+            result = json.loads(raw)
+            reply = str(result.get("reply", "")).strip()
 
-                extracted = result.get("extractedData", {})
-                if not isinstance(extracted, dict):
-                    extracted = {}
+            if not reply:
+                raise ValueError("Empty reply")
 
-                return {
-                    "reply": reply,
-                    "scamType": scam_type,
-                    "confidence": confidence,
-                    "urgency": urgency,
-                    "extractedData": extracted,
-                }
+            # Safety: never reveal AI identity
+            reply_lower = reply.lower()
+            if any(x in reply_lower for x in [
+                "language model", "as an ai", "i'm an ai", "artificial intelligence",
+                "openai", "groq", "llama", "i am an ai", "i'm a bot",
+            ]):
+                raise ValueError("AI identity leak")
 
-            except Exception as e:
-                print(f"[LLM ERROR] {model} (key={'primary' if client == _groq_primary else 'recovery'}): {e}")
-                continue
+            scam_type = str(result.get("scamType", "generic"))
+            if scam_type not in SCAM_TYPES:
+                scam_type = "generic"
+            confidence = max(0.0, min(1.0, float(result.get("confidence", 0.7))))
+            urgency = str(result.get("urgency", "medium"))
+            if urgency not in ("low", "medium", "high", "critical"):
+                urgency = "medium"
+
+            extracted = result.get("extractedData", {})
+            if not isinstance(extracted, dict):
+                extracted = {}
+
+            return {
+                "reply": reply,
+                "scamType": scam_type,
+                "confidence": confidence,
+                "urgency": urgency,
+                "extractedData": extracted,
+            }
+
+        except Exception as e:
+            err_str = str(e).lower()
+            key_label = 'primary' if client == _groq_primary else 'recovery'
+            if "rate_limit" in err_str or "429" in err_str:
+                _last_429_time = asyncio.get_event_loop().time()
+                print(f"[LLM] 429 on {model} ({key_label}), moving to next in chain...")
+            else:
+                print(f"[LLM ERROR] {model} ({key_label}): {e}")
+            continue  # move to next fallback chain entry
 
     # All clients × all models failed
     print("[LLM] All keys+models failed — using rule-based fallback")
