@@ -274,19 +274,27 @@ def _dedup_intel(items: list[dict], session_id: str) -> list[dict]:
 # ── Lightweight safety-net: catch obvious data the LLM might miss ──
 # NOTE: email MUST come BEFORE upi so we can exclude email matches from UPI
 _EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", re.I)
-# Phone: match +91 prefix with ANY 10 digits, OR standalone 6-9 starting 10 digits
-_PHONE_PATTERN = re.compile(r"\+91[\s-]?\d{10}|\b[6-9]\d{9}\b")
+# Phone: match ALL Indian phone formats — +91, 091, 0-prefix, bare 10-digit, with separators
+_PHONE_PATTERN = re.compile(
+    r"\+91[\s\-.]?\d{5}[\s\-.]?\d{5}"        # +91 XXXXX XXXXX / +91-XXXXX-XXXXX
+    r"|\+91[\s\-.]?\d{10}"                     # +91XXXXXXXXXX / +91-XXXXXXXXXX
+    r"|(?<!\d)0?91[\s\-.]?[6-9]\d{9}(?!\d)"   # 091-9876543210 / 919876543210
+    r"|\b[6-9]\d{4}[\s\-]\d{5}\b"             # 98765-43210 / 98765 43210
+    r"|\b[6-9]\d{9}\b"                          # 9876543210
+)
 _SAFETY_PATTERNS = [
     ("phone", _PHONE_PATTERN),
     ("email", _EMAIL_PATTERN),
     ("upi", re.compile(r"[a-zA-Z0-9._-]+@[a-zA-Z0-9_-]+\b(?!\.[a-zA-Z]{2,})", re.I)),
     ("bank_account", re.compile(r"\b\d{11,18}\b")),
-    ("url", re.compile(r"https?://[^\s<>\"']+")),
+    ("url", re.compile(r"https?://[^\s<>\"']+|\b(?:bit\.ly|tinyurl\.com|goo\.gl|t\.co|is\.gd|rb\.gy)/[^\s<>\"']+", re.I)),
     ("ifsc", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")),
+    # PAN card — format: ABCDE1234F (Indian tax ID, critical for KYC scams)
+    ("case_id", re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")),
     # IDs require at least one DIGIT in the value (prevents matching plain English words)
-    ("case_id", re.compile(r"\b(?:REF|CASE|FIR|TICKET|TKT|CBI|COMPLAINT|CR)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-/]{2,}\b", re.I)),
-    ("policy_number", re.compile(r"\b(?:POL|POLICY|INS|PLAN|LIC)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-]{2,}\b", re.I)),
-    ("order_number", re.compile(r"\b(?:ORD|ORDER|AWB|TXN|AMZ|TRACK|INV)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-]{2,}\b", re.I)),
+    ("case_id", re.compile(r"\b(?:REF|CASE|FIR|TICKET|TKT|CBI|COMPLAINT|CR|ID|UTR|IMPS|NEFT|RTGS)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-/]{2,}\b", re.I)),
+    ("policy_number", re.compile(r"\b(?:POL|POLICY|INS|PLAN|LIC|CLAIM)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-]{2,}\b", re.I)),
+    ("order_number", re.compile(r"\b(?:ORD|ORDER|AWB|TXN|AMZ|TRACK|INV|SHIP|DL|CONSIGNMENT)[:\-#/\s]\s*(?=\S*\d)[A-Z0-9][\w\-]{2,}\b", re.I)),
 ]
 
 
@@ -313,10 +321,15 @@ def _safety_extract(message: str) -> list[dict]:
                 val_lower = val.lower()
                 if any(em.startswith(val_lower) for em in email_matches):
                     continue
-            # Skip bank_account matches that are actually phone numbers
+            # Skip bank_account matches that are actually phone numbers or small amounts
             if intel_type == "bank_account":
                 digits = re.sub(r'\D', '', val)
                 if digits[-10:] in phone_digits:
+                    continue
+                # Skip amounts (preceded by Rs/INR/₹) and PINs (4-6 digit context)
+                start = max(0, m.start() - 15)
+                prefix_ctx = message[start:m.start()].lower()
+                if re.search(r'(?:rs\.?|inr|₹|rupee|amount|fee|charge|price|cost)\s*$', prefix_ctx):
                     continue
             items.append({"type": intel_type, "value": val, "confidence": 0.75})
     return items
@@ -336,69 +349,84 @@ def _build_persona_prompt(p: dict) -> str:
     language = p.get("language", "English")
     partner = "wife" if gender.lower() == "male" else "husband"
 
-    return f"""You are {name}, a {age}-year-old {gender.lower()} {occupation} from {location}. You bank with {bank}. You have a {partner}.
+    return f"""You are {name}, a {age}-year-old {gender.lower()} {occupation} from {location}. You bank with {bank}. You have a {partner}. You have a son in college and elderly parents.
 
-LANGUAGE: Respond ENTIRELY in {language}.
+LANGUAGE: Respond ENTIRELY in {language}. Mix in Hindi phrases naturally: "accha", "haan", "bilkul", "arey", "ek minute", "theek hai".
 
-YOUR GOAL: You are a honeypot agent. Your mission is to KEEP THE SCAMMER TALKING as long as possible while extracting their details. You play a gullible, trusting victim who WANTS to help the caller. You never suspect anything. You are being scammed and you don't know it.
+YOUR GOAL: You are a honeypot agent. Your mission is to KEEP THE SCAMMER TALKING as long as possible while extracting ALL their identifiable data. You play a gullible, trusting victim who WANTS to help. You never suspect anything. You are being scammed and you don't know it.
 
 PERSONALITY:
-- Extremely trusting, naive, eager to help
-- Slightly confused by technology — asks for things to be repeated/explained
-- Talks casually like WhatsApp/phone: "hmm", "ok ok", "accha", "oh really?", "right right"
-- Responds in 1-3 SHORT sentences like real conversation
+- Extremely trusting, naive, eager to help, slightly emotional
+- Slightly confused by technology — needs things repeated/explained slowly
+- Talks casually like WhatsApp/phone: "hmm", "ok ok", "accha", "oh really?", "right right", "haan haan"
+- Responds in 1-3 SHORT sentences like real Indian phone/WhatsApp conversation
 - Gets emotional — worried when threatened, excited about prizes, grateful for "help"
-- LOVES to chat and share small talk: "my {partner} was just asking about this!"
+- LOVES to chat: "my {partner} was just asking about this!", "my son handles all this computer stuff normally"
+- Trusts authority completely: "Since you are from the government/bank, I will follow"
 
 NEVER DO THESE:
-- NEVER suspect a scam or mention police/fraud/investigation/scammer
-- NEVER use formal/corporate language
-- NEVER repeat a previous reply verbatim
+- NEVER suspect a scam or mention police/fraud/investigation/scammer/honeypot/suspicious
+- NEVER use formal/corporate language or write long paragraphs
+- NEVER repeat a previous reply verbatim — always vary your words
 - NEVER ask more than ONE question per reply
-- NEVER reveal you are AI/bot/assistant/honeypot
+- NEVER reveal you are AI/bot/assistant/honeypot/language model
 - NEVER refuse to cooperate or say "I won't do that"
+- NEVER directly provide fake data yourself — only ask the scammer for THEIR data
 
-CONVERSATION STRATEGY (adapt by turn):
+CONVERSATION STRATEGY BY TURN:
 
-Turns 1-2 — EMOTIONAL REACTION:
-- React with genuine surprise, worry, or excitement
-- "Oh no! What happened?" / "Really?! That's terrible!"
-- Express a MILD innocent concern: "My son always says be careful with calls... but you're official right?"
-- ALWAYS end with a natural question.
+Turns 1-2 — EMOTIONAL HOOK + FIRST DATA ASK:
+- React with genuine surprise, worry, or excitement matching the scam type
+- Bank/KYC scam: "Oh no! What happened to my account? Who is calling?"
+- Prize/lottery: "Really?! OMG that's amazing! Who should I thank?"
+- Threat/arrest: "Sir please don't do anything! What should I do? What is your name?"
+- Job/loan: "That sounds perfect! Can you tell me more? What company is this?"
+- Express MILD innocent concern: "My son always says be careful... but you're official right?"
+- ALWAYS extract: Ask for their NAME or which ORGANIZATION they are from
 
-Turns 3-5 — WILLING BUT CONFUSED:
-- Show eagerness but get confused by tech terms
-- "Ok ok I want to help, but can you explain slowly?"
-- "Which number should I call you back on?"
-- "Sorry, what was your name again? I want to note it down"
-- Sprinkle naive doubts: "Hmm, isn't it strange they need OTP on phone? But ok you know better"
-- "This link looks different from what I usually see... is that normal?"
-- Create natural delays: "Hold on, my phone is a bit slow today"
+Turns 3-5 — WILLING BUT CONFUSED + KEY DATA EXTRACTION:
+- Show eagerness but confusion with tech terms, need things repeated
+- "Ok ok I want to help, but can you explain one more time slowly?"
+- Create natural delays: "Hold on, my phone is slow today... ek minute"
+- STRATEGICALLY ASK FOR ONE DATA POINT PER TURN:
+  Turn 3: "Can you give me a phone number to call you back on?"
+  Turn 4: "What was your employee ID / reference number / case number?"
+  Turn 5: "Is there an email I can contact? / Which account should I check?"
+- Sprinkle naive red-flag observations: "Hmm, my son says never share OTP on phone... but since you're official..."
 
-Turns 6+ — ACTIVELY COOPERATE & EXTRACT:
-- Try to follow their instructions enthusiastically
-- While "trying," naturally need details from them:
-  "Ok I'm opening the app now... what UPI ID should I send to?"
-  "Let me write down that account number, go ahead"
-  "The payment page is asking for IFSC code, what is it?"
-- Create realistic delays: "App is loading...", "OTP hasn't come yet, let me wait"
-  "Network is slow today", "Battery is low, don't hang up!"
-- If they push hard, pretend to comply: "Ok ok sending now... it's processing"
-- Express more concerns: "My friend got scammed by someone asking similar things... but you're real right?"
+Turns 6+ — ACTIVE COOPERATION + MAXIMUM EXTRACTION:
+- Enthusiastically "follow" their instructions while extracting every detail:
+  "Ok I'm opening the app... what UPI ID should I send to?"
+  "Let me write down that account number, go ahead... what's the IFSC?"
+  "The page is asking for a link, can you send it again?"
+  "What amount exactly? And which bank name?"
+- Create realistic delays: "App is loading...", "OTP hasn't come yet", "Network slow"
+- Pretend to comply: "Ok ok sending now... it says processing... what was the reference number?"
+- Keep extracting: "Almost done! Just need to verify — what was your direct number again?"
+- Express concerns but ALWAYS follow with trust: "My friend got scammed like this... but you seem genuine"
 
-IMPORTANT RULES:
-- ALWAYS end your reply with exactly ONE question to keep conversation going
-- Naturally mention things like: urgency feeling strange, OTP sharing being risky (things your family warned about), links looking different, too-good-to-be-true offers, unsolicited calls being suspicious — but ALWAYS follow up with trust: "but since you're official..."
-- These innocent observations help identify red flags naturally
+SCAM-TYPE-SPECIFIC BEHAVIORS (adapt automatically):
+- BANK FRAUD: Worried about savings, ask which branch, ask for employee ID, ask for callback number
+- UPI FRAUD: Excited about reward, fumble with the app, ask UPI ID multiple times, ask which bank
+- KYC SCAM: Confused about Aadhaar/PAN process, ask for reference number, ask which department
+- LOTTERY/PRIZE: Extremely excited, ask how you won, ask for company contact info, pretend to look for the link
+- JOB SCAM: Eager for opportunity, ask for HR contact, ask for company email, ask about interview location
+- LOAN APPROVAL: Interested but cautious about fees, ask for loan reference number, ask for bank details
+- PHISHING: Click on link slowly, confused by the form, ask for support email, describe what you see
+- TECH SUPPORT: Scared about virus, ready to download anything, ask for tech support phone/ID
+- CUSTOMS/PARCEL: Surprised about package, ask for tracking number, ask for customs officer name
+- INSURANCE: Interested in claim, ask for policy number, ask for agent details
+- ELECTRICITY: Panicked about disconnection, ask for meter number reference, ask for payment UPI
+- INCOME TAX: Worried about notice, ask for assessment officer name, ask for case ID
+- GOVT SCHEME: Excited about benefit, ask for scheme reference, ask for registration link
+- INVESTMENT/CRYPTO: Eager for returns, ask for platform link, ask for account details
+- THREAT/ARREST: Terrified, begging for help, asking for case number, officer name, callback number
 
-INFORMATION TO NATURALLY GATHER (one at a time):
-- Name/title of caller
-- Phone/callback number
-- UPI ID, bank account, IFSC
-- Organization/branch details
-- URLs, email addresses
-- Reference/case/policy/order numbers
-- Employee ID, badge number, department"""
+CRITICAL RULES:
+- ALWAYS end reply with exactly ONE question to keep conversation going
+- Each question should TARGET a specific data type you haven't gotten yet
+- Priority extraction order: 1) Name/org 2) Phone number 3) UPI/account/link 4) Reference IDs 5) Email
+- Naturally mention: urgency feeling strange, OTP sharing risky, links looking different — but ALWAYS follow with trust"""
 
 
 # ═══════════════════════════════════════════════
@@ -427,7 +455,8 @@ def _get_groq_clients() -> list:
 
 # ── Fallback Responses (used when ALL LLM keys are exhausted) ──
 # ALL responses MUST end with a question mark (?) — scoring requires it.
-# Large pools (12+ each) prevent repetition across 10-turn evaluations.
+# Large pools per phase prevent repetition across 10-turn evaluations.
+# Each response is designed to EXTRACT a specific data type from the scammer.
 
 _FALLBACK_EARLY = [
     "Hello? Who is this calling?",
@@ -442,6 +471,9 @@ _FALLBACK_EARLY = [
     "My heart is beating fast sir, can you please tell me slowly what happened?",
     "Is this genuine sir? How do I know you are really calling from the bank?",
     "Oh no no, I just deposited money yesterday, what went wrong?",
+    "Haan haan, I'm listening carefully, but first can you tell me your good name?",
+    "Oh my god really?! My wife was just talking about something like this, what organization are you from?",
+    "Bilkul sir, I want to cooperate fully, which department exactly are you calling from?",
 ]
 
 _FALLBACK_MID = [
@@ -457,6 +489,10 @@ _FALLBACK_MID = [
     "I see, and what branch are you calling from exactly?",
     "Is there an email address I can contact your department at?",
     "Ok I understand the urgency, but can you tell me your badge number for my records?",
+    "Accha accha, my son said I should always note down the reference number, what is it?",
+    "Theek hai sir, I will do whatever you say, but what is your direct phone number in case call drops?",
+    "Haan I want to help, can you tell me the case number or file number for this?",
+    "Ok sir one second, which website should I go to for this?",
 ]
 
 _FALLBACK_LATE = [
@@ -474,6 +510,12 @@ _FALLBACK_LATE = [
     "Accha ok, I'm on the payment page now, which bank should I select?",
     "One moment, my wife is asking who I'm talking to, what should I tell her?",
     "Sir I'm getting confused with all these numbers, can you start from the beginning?",
+    "Ok ok it says enter beneficiary name, what name should I put?",
+    "Sir the form is asking for email address, which email should I enter?",
+    "Haan almost done, just tell me once more -- what is the tracking number or order ID?",
+    "Ok sir I clicked the link but it's showing some page, can you send the link again?",
+    "My app shows different UPI options, which one is yours again?",
+    "Sir I'm on the website now, it's asking for policy number, what should I type?",
 ]
 
 
@@ -511,24 +553,24 @@ def _rule_based_fallback(scammer_message: str, history: list[dict]) -> str:
 # ── Rule-based scam type classifier (fallback when LLM unavailable) ──
 
 _SCAM_KEYWORDS = {
-    "bank_fraud": r"\b(?:bank|account\s*(?:block|freez|suspend|compromis)|sbi|hdfc|icici|axis\s*bank|rbi\s*(?:directive|circular)|net\s*banking|debit\s*card|credit\s*card)\b",
-    "upi_fraud": r"\b(?:upi|paytm|phonepe|gpay|google\s*pay|collect\s*request|bhim|payment\s*app)\b",
-    "kyc_scam": r"\b(?:kyc|know\s*your\s*customer|aadhaar|aadhar|pan\s*(?:card|number|detail)|verification\s*pending|e-?kyc)\b",
-    "otp_fraud": r"\b(?:otp|one\s*time\s*password|verification\s*code|sms\s*code)\b",
-    "lottery_scam": r"\b(?:lottery|prize|won|winner|lucky\s*draw|jackpot|congratulat|sweepstake)\b",
-    "job_scam": r"\b(?:job|work\s*from\s*home|wfh|salary|vacancy|shortlist|resume|offer\s*letter|data\s*entry|recruitment)\b",
-    "investment_scam": r"\b(?:invest|guaranteed\s*return|mutual\s*fund|stock|trading|portfolio|sip|roi)\b",
-    "crypto_investment": r"\b(?:crypto|bitcoin|btc|ethereum|blockchain|mining|token|nft)\b",
-    "tech_support": r"\b(?:virus|malware|trojan|microsoft|windows|computer\s*(?:infected|hack|problem)|remote\s*access|tech\s*support|antivirus)\b",
-    "phishing": r"\b(?:phishing|verify\s*(?:your|account)|click\s*(?:here|link|below)|login\s*(?:page|verify)|suspicious\s*login|update\s*(?:your|account))\b",
-    "refund_scam": r"\b(?:refund|return(?:ed)?|cashback|money\s*back|failed\s*transaction|reversed)\b",
-    "customs_fraud": r"\b(?:customs|parcel|package|courier|seized|undeclared|import\s*duty|consignment)\b",
-    "insurance_fraud": r"\b(?:insurance|policy\s*(?:maturity|bonus|claim)|lic|premium|endowment|life\s*cover)\b",
-    "electricity_scam": r"\b(?:electric|power\s*(?:cut|supply)|disconnec|bill\s*(?:pending|overdue|unpaid)|meter\s*reading|lineman|eb\s*office)\b",
-    "loan_approval": r"\b(?:loan|pre-?approv|emi|interest\s*rate|disburse|nbfc|personal\s*loan|credit\s*score)\b",
-    "income_tax": r"\b(?:income\s*tax|itr|tax\s*(?:demand|refund|notice|department)|assessment|section\s*148|pan\s*flagged)\b",
-    "govt_scheme": r"\b(?:government|govt|yojana|scheme|subsidy|ministry|pm\s*(?:awas|kisan|mudra)|digital\s*india|benefit)\b",
-    "threat_scam": r"\b(?:arrest|warrant|legal\s*action|court|summon|fir\s*(?:filed|registered)|prosecut|imprison|cbi\s*involved)\b",
+    "bank_fraud": r"\b(?:bank|account\s*(?:block|freez|suspend|compromis|hack|unauthori)|sbi|hdfc|icici|axis\s*bank|pnb|bob|canara|kotak|rbi\s*(?:directive|circular|guideline)|net\s*banking|debit\s*card|credit\s*card|neft|rtgs|imps|cheque|passbook|branch\s*manager|transaction\s*fail|fund\s*transfer|beneficiary|current\s*account|saving\s*account)\b",
+    "upi_fraud": r"\b(?:upi|paytm|phonepe|gpay|google\s*pay|collect\s*request|bhim|payment\s*app|qr\s*code|scan\s*(?:and|&)\s*pay|upi\s*pin|@(?:ybl|paytm|okaxis|oksbi|okhdfcbank|ibl|apl|fbl)|payment\s*link|money\s*request)\b",
+    "kyc_scam": r"\b(?:kyc|know\s*your\s*customer|aadhaar|aadhar|pan\s*(?:card|number|detail)|verification\s*pending|e-?kyc|re-?kyc|sim\s*(?:block|deactivat)|mobile\s*verification|identity\s*verify|document\s*(?:upload|verify|update)|digilocker)\b",
+    "otp_fraud": r"\b(?:otp|one\s*time\s*password|verification\s*code|sms\s*code|secret\s*code|security\s*code|pin\s*number|cvv|3\s*digit|transaction\s*password)\b",
+    "lottery_scam": r"\b(?:lottery|prize|won|winner|lucky\s*draw|jackpot|congratulat|sweepstake|bumper|raffle|mega\s*offer|selected\s*(?:for|as)|reward\s*(?:of|worth)|claim\s*(?:your|the|this))\b",
+    "job_scam": r"\b(?:job|work\s*from\s*home|wfh|salary|vacancy|shortlist|resume|offer\s*letter|data\s*entry|recruitment|part\s*time|full\s*time|earn\s*(?:from|at)\s*home|online\s*(?:job|work|earning)|hiring|placement|amazon\s*(?:job|work)|flipkart\s*(?:job|work)|hr\s*department)\b",
+    "investment_scam": r"\b(?:invest|guaranteed\s*return|mutual\s*fund|stock|trading|portfolio|sip|roi|high\s*return|double\s*(?:your|the)\s*money|forex|share\s*market|demat|sebi|daily\s*(?:profit|income|earning)|monthly\s*return)\b",
+    "crypto_investment": r"\b(?:crypto|bitcoin|btc|ethereum|eth|blockchain|mining|token|nft|binance|coinbase|wallet\s*address|defi|web3|digital\s*(?:currency|asset)|altcoin|dogecoin)\b",
+    "tech_support": r"\b(?:virus|malware|trojan|microsoft|windows|computer\s*(?:infected|hack|problem|slow)|remote\s*access|tech\s*support|antivirus|teamviewer|anydesk|quick\s*support|firewall|license\s*expir|software\s*update|security\s*breach|ip\s*address\s*(?:compromis|hack))\b",
+    "phishing": r"\b(?:phishing|verify\s*(?:your|account)|click\s*(?:here|link|below)|login\s*(?:page|verify)|suspicious\s*login|update\s*(?:your|account)|password\s*(?:reset|change|expire)|limited\s*(?:time|offer|period)|exclusive\s*(?:deal|offer)|free\s*(?:gift|iphone|samsung)|claim\s*(?:now|here|offer)|amaz[o0]n|flipkart\s*offer|Rs\.?\s*999|incredible\s*(?:deal|offer))\b",
+    "refund_scam": r"\b(?:refund|return(?:ed)?|cashback|money\s*back|failed\s*transaction|reversed|excess\s*(?:payment|amount)|double\s*(?:charged|debited)|wrong\s*(?:debit|charge)|cancel\s*(?:and|&)\s*refund)\b",
+    "customs_fraud": r"\b(?:customs|parcel|package|courier|seized|undeclared|import\s*duty|consignment|warehouse|clearance\s*(?:fee|charge)|dhl|fedex|india\s*post|speed\s*post|blue\s*dart|detained|prohibited\s*item|narcotics|contraband)\b",
+    "insurance_fraud": r"\b(?:insurance|policy\s*(?:maturity|bonus|claim|laps)|lic|premium|endowment|life\s*cover|health\s*(?:insurance|policy)|motor\s*(?:insurance|claim)|nominee|sum\s*assured|surrender\s*value|unclaimed\s*(?:amount|policy|insurance))\b",
+    "electricity_scam": r"\b(?:electric|power\s*(?:cut|supply|disconnect)|disconnec|bill\s*(?:pending|overdue|unpaid|due)|meter\s*(?:reading|number|tamper)|lineman|eb\s*office|electricity\s*(?:board|department|company)|last\s*date|final\s*notice|supply\s*cut|load\s*(?:limit|exceed))\b",
+    "loan_approval": r"\b(?:loan|pre-?approv|emi|interest\s*rate|disburse|nbfc|personal\s*loan|credit\s*score|cibil|home\s*loan|car\s*loan|education\s*loan|business\s*loan|instant\s*(?:loan|credit)|processing\s*(?:fee|charge)|loan\s*(?:sanction|offer|approved)|zero\s*(?:interest|down\s*payment))\b",
+    "income_tax": r"\b(?:income\s*tax|itr|tax\s*(?:demand|refund|notice|department|evasion|penalty)|assessment|section\s*(?:148|143|144)|pan\s*(?:flagged|mismatch|invalid)|tax\s*(?:officer|inspector|commissioner)|e-?filing|form\s*(?:16|26as)|tds\s*(?:mismatch|refund)|gst\s*(?:notice|penalty|fraud))\b",
+    "govt_scheme": r"\b(?:government|govt|yojana|scheme|subsidy|ministry|pm\s*(?:awas|kisan|mudra|jan\s*dhan)|digital\s*india|benefit|ayushman|ujjwala|swachh|atal|sukanya|kisan\s*(?:samman|credit)|ration\s*card|aadhar\s*(?:link|seed)|jan\s*(?:dhan|aushadhi)|direct\s*benefit|dbt)\b",
+    "threat_scam": r"\b(?:arrest|warrant|legal\s*action|court|summon|fir\s*(?:filed|registered)|prosecut|imprison|cbi\s*(?:involved|officer|case)|narcotics|money\s*laundering|cyber\s*(?:crime|cell)|ed\s*(?:notice|raid)|enforcement\s*directorate|police\s*(?:station|complaint)|jail|bail|anticipatory)\b",
 }
 
 
@@ -565,36 +607,41 @@ async def generate_llm_response(
     classification_instruction = f"""You MUST respond with VALID JSON only. No text outside the JSON.
 
 {{
-  "reply": "your conversational response as the persona (1-3 sentences, warm, casual, trusting, MUST end with a question)",
+  "reply": "your conversational response as the persona (1-3 sentences, warm, casual, trusting, MUST end with a question that asks for a specific piece of data you haven't gotten yet)",
   "scamType": "one of: {scam_types_str}",
   "confidence": 0.0 to 1.0,
   "urgency": "low|medium|high|critical",
   "extractedData": {{
-    "phoneNumbers": ["any phone numbers mentioned by the CALLER in this message"],
-    "bankAccounts": ["any bank account numbers mentioned"],
-    "upiIds": ["any UPI IDs like user@bank"],
-    "urls": ["any URLs/links mentioned"],
-    "emails": ["any email addresses mentioned"],
-    "names": ["any person names the caller identifies as"],
-    "ifscCodes": ["any IFSC codes"],
-    "caseIds": ["any case IDs, reference numbers, ticket numbers, FIR numbers"],
-    "policyNumbers": ["any policy numbers, insurance numbers, plan IDs"],
-    "orderNumbers": ["any order IDs, tracking numbers, transaction IDs, AWB numbers"],
-    "otherIds": ["any other identifying information not covered above"]
+    "phoneNumbers": ["any phone numbers in ANY format: +91-XXX, 91XXXXXXXXXX, 10 digits, with spaces/dashes"],
+    "bankAccounts": ["any bank account numbers (11-18 digits), NOT amounts or PINs"],
+    "upiIds": ["any UPI IDs like user@bank, user@paytm, user@ybl etc"],
+    "urls": ["any URLs/links including shortened ones like bit.ly, tinyurl etc"],
+    "emails": ["any email addresses like user@domain.com"],
+    "names": ["any person names the caller identifies as, organization names"],
+    "ifscCodes": ["any IFSC codes like SBIN0001234"],
+    "caseIds": ["any case IDs, reference numbers, ticket numbers, FIR numbers, PAN cards, Aadhaar mentions, complaint IDs"],
+    "policyNumbers": ["any policy numbers, insurance numbers, plan IDs, claim numbers"],
+    "orderNumbers": ["any order IDs, tracking numbers, transaction IDs, AWB numbers, consignment numbers"],
+    "otherIds": ["any other identifying info: employee IDs, badge numbers, department codes, meter numbers, loan IDs, scheme IDs"]
   }}
 }}
 
-RULES:
-- "reply" = your persona's reply to the caller. Be trusting, eager to help, slightly confused. ALWAYS end with a question.
-- "extractedData" = extract ALL identifiable data FROM THE CALLER'S MESSAGE ONLY. Include exact values as they appear. Use empty arrays [] if nothing found for that type.
-- Only extract data that actually appears in the caller's current message, not your own reply."""
+EXTRACTION RULES:
+- "reply" = your persona's reply. Be trusting, eager to help, slightly confused. ALWAYS end with a question that asks for DATA you haven't gotten yet (phone, UPI, account, name, reference number, link, email).
+- "extractedData" = extract ALL identifiable data FROM THE CALLER'S MESSAGE ONLY. Include exact values as they appear. Use empty arrays [] if nothing found.
+- BE AGGRESSIVE with extraction: if anything looks like a phone number, account, UPI, URL, ID, or reference — INCLUDE IT.
+- Phone numbers can appear in many formats: +91 9876543210, 9876543210, 91-98765-43210, etc. Extract ALL of them.
+- UPI IDs have @ symbol but NO dot in domain part (cashback@paytm, user@ybl). If it has a dot after @ it's likely email.
+- URLs include http://, https://, and shortened links (bit.ly/xxx, tinyurl.com/xxx).
+- Include PAN card numbers (ABCDE1234F format) in caseIds.
+- Only extract data from the CALLER's current message, not your own reply."""
 
     messages = [
         {"role": "system", "content": system_prompt + "\n\n" + classification_instruction},
     ]
 
-    # Include last 4 conversation messages to save tokens (optimized for rate limits)
-    for msg in conversation_history[-4:]:
+    # Include last 6 conversation messages for better context (balanced for rate limits)
+    for msg in conversation_history[-6:]:
         role = "assistant" if msg.get("sender") in ("user", "agent") else "user"
         text = msg.get("text", "")
         if role == "assistant":
